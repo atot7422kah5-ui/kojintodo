@@ -32,6 +32,12 @@
     arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
     alert: '<path d="M12 3.5 2.5 20h19L12 3.5z"/><path d="M12 10v4.5M12 17.5v.01"/>',
     login: '<path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"/><path d="m10 16 4-4-4-4"/><path d="M14 12H4"/>',
+    mountain: '<path d="m2.5 20 7-12 4.5 7.5 2.5-4 5 8.5z"/><path d="m7.6 11.3 1.9 1.7 1.8-1.6"/>',
+    book: '<path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v14.5H7.5A2.5 2.5 0 0 0 5 20z"/><path d="M5 20a1.5 1.5 0 0 0 1.5 1.5H19v-4"/><path d="M9 7.5h6"/>',
+    edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
+    image: '<rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.8"/><path d="m21 16-5-5-8.5 8.5"/>',
+    left: '<path d="m15 5-7 7 7 7"/>',
+    right: '<path d="m9 5 7 7-7 7"/>',
     sparkle: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',
   };
 
@@ -431,13 +437,250 @@
     </div>`;
   }
 
+  /* ------------------------------------------------------------------
+   * 画面：Vision
+   * ------------------------------------------------------------------ */
+  const COMPOUND = 1.01;
+  // 1.01 の n 乗が節目の倍率に届く日数
+  const MILESTONES = [
+    { days: 70, label: '2倍' },
+    { days: 111, label: '3倍' },
+    { days: 162, label: '5倍' },
+    { days: 232, label: '10倍' },
+    { days: 302, label: '20倍' },
+    { days: 365, label: '37.8倍（1年分）' },
+  ];
+
+  function formatTimes(x) {
+    return x >= 10 ? x.toFixed(1) : x.toFixed(2);
+  }
+
+  /** 1%の複利メーター（n = 前進した日数） */
+  function compoundMeter(n) {
+    const next = MILESTONES.find((m) => m.days > n);
+    const prev = MILESTONES.filter((m) => m.days <= n).pop();
+    const from = prev ? prev.days : 0;
+    const pct = next ? Math.round(((n - from) / (next.days - from)) * 100) : 100;
+    const nextText = next ? `あと <b>${next.days - n}</b> 日で ${next.label}` : '1年分の複利を達成しました';
+    return `<section class="vcard meter" aria-label="1%の複利メーター">
+      <p class="vcard-label">1% better everyday</p>
+      <p class="meter-value"><span class="meter-x">×</span>${formatTimes(COMPOUND ** n)}</p>
+      <p class="meter-formula">1.01<sup>${n}</sup>　前進した日 ${n} 日</p>
+      <div class="meter-bar" aria-hidden="true"><span style="width:${pct}%"></span></div>
+      <p class="meter-next">${nextText}</p>
+      <p class="vcard-note">Daily をすべて完了した日と、日記に「今日の1%成長」を書いた日を数えます</p>
+    </section>`;
+  }
+
+  function countdownCard(year, today) {
+    if (!year) return '';
+    const start = `${year}-01-01`;
+    const end = `${year}-12-31`;
+    if (today < start) {
+      return `<section class="vcard countdown">
+        <p class="vcard-label">${year}年まで</p>
+        <p class="countdown-value">あと<b>${diffDays(today, start)}</b>日</p>
+        <p class="vcard-note">${year}年1月1日から、ビジョンの1年が始まります</p>
+      </section>`;
+    }
+    if (today <= end) {
+      const total = diffDays(start, end) + 1;
+      const passed = diffDays(start, today) + 1;
+      const pct = Math.round((passed / total) * 100);
+      return `<section class="vcard countdown">
+        <p class="vcard-label">${year}年の進捗</p>
+        <p class="countdown-value"><b>${pct}</b>%</p>
+        <div class="meter-bar" aria-hidden="true"><span style="width:${pct}%"></span></div>
+        <p class="vcard-note">${passed}日目・残り ${total - passed} 日</p>
+      </section>`;
+    }
+    return `<section class="vcard countdown">
+      <p class="vcard-label">${year}年</p>
+      <p class="countdown-value countdown-done">完走しました</p>
+      <p class="vcard-note">「編集」から新しいビジョンを設定しましょう</p>
+    </section>`;
+  }
+
+  function viewVision(ctx) {
+    const { state, today } = ctx;
+    const v = state.vision;
+    const img = state.visionImage;
+    const keywords = v ? v.keywords : [];
+    const word = keywords.length ? keywords[diffDays('2000-01-01', today) % keywords.length] : '';
+    const title = (v && v.title) || 'My Vision';
+    const progress = S.dailyProgress(today);
+    const wrote = Boolean(S.getJournal(today));
+
+    const hero = img
+      ? `<figure class="vision-hero">
+          <button type="button" class="vision-img-btn" data-action="vision-full" aria-label="ボードを全画面で見る">
+            <img class="vision-img" src="${img.dataUrl}" alt="ビジョンボード"${img.width ? ` width="${img.width}" height="${img.height}"` : ''}>
+          </button>
+          <figcaption class="vision-caption">
+            <span class="vision-eyebrow">${word ? "Today's word" : 'My vision'}</span>
+            <span class="vision-word">${esc(word || title)}</span>
+          </figcaption>
+        </figure>`
+      : `<div class="vision-hero vision-hero--empty">
+          ${icon('image')}
+          <p class="vision-empty-title">ビジョンボードを追加しましょう</p>
+          <p class="vision-empty-text">画像を1枚選ぶと、ここに毎日表示されます。<br>写真はこの端末で軽く圧縮してから保存します。</p>
+          <button type="button" class="btn btn-primary" data-action="vision-pick-image">${icon('image')}画像を選ぶ</button>
+        </div>`;
+
+    const textBlock = v && (keywords.length || v.statement.trim())
+      ? `${keywords.length ? `<section class="vision-section">
+            <h2 class="section-title">キーワード</h2>
+            <ul class="keyword-list">${keywords.map((k) => `<li class="keyword${k === word ? ' is-today' : ''}">${esc(k)}</li>`).join('')}</ul>
+          </section>` : ''}
+          ${v.statement.trim() ? `<section class="vision-section">
+            <h2 class="section-title">なりたい姿</h2>
+            <p class="vision-statement">${esc(v.statement)}</p>
+          </section>` : ''}`
+      : `<section class="vision-section"><p class="muted-box">「編集」から、キーワード（例：1% better everyday、Discipline）となりたい姿を書いておきましょう。キーワードは「今日の言葉」として日替わりで表示されます。</p></section>`;
+
+    return `<div class="view view-vision">
+      ${storageBanner(ctx)}
+      <header class="view-header view-header--row">
+        <div class="view-header-text">
+          <p class="eyebrow">${formatMonthDay(today)}</p>
+          <h1 class="view-title">${esc(title)}</h1>
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm" data-action="vision-edit">${icon('edit')}編集</button>
+      </header>
+      ${hero}
+      <div class="vision-cards">
+        ${compoundMeter(S.growthDays(today).length)}
+        ${countdownCard(v && v.year, today)}
+        <section class="vcard today-card">
+          <p class="vcard-label">今日</p>
+          <a class="today-link" href="#today"><span>Daily</span><b>${progress.total ? `${progress.done} / ${progress.total}` : '–'}</b>${icon('right')}</a>
+          <a class="today-link" href="#journal"><span>日記</span><b>${wrote ? '書きました' : 'まだ'}</b>${icon('right')}</a>
+        </section>
+      </div>
+      ${textBlock}
+    </div>`;
+  }
+
+  /* ------------------------------------------------------------------
+   * 画面：日記
+   * ------------------------------------------------------------------ */
+  const MOODS = [
+    { value: 1, label: 'しんどい' },
+    { value: 2, label: 'いまいち' },
+    { value: 3, label: 'ふつう' },
+    { value: 4, label: 'いい感じ' },
+    { value: 5, label: '最高' },
+  ];
+  const GOOD_HINTS = ['うれしかったこと', '感謝したいこと', 'うまくいったこと'];
+  const EMPTY_JOURNAL = { mood: null, growth: '', good: ['', '', ''], tomorrow: '', memo: '' };
+  const pad2 = (n) => String(n).padStart(2, '0');
+
+  function calendar(state, ui, today) {
+    const [y, m] = ui.journalMonth.split('-').map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const offset = (new Date(y, m - 1, 1).getDay() + 6) % 7; // 月曜始まり
+    const entries = new Map(state.journals.map((j) => [j.date, j]));
+    const isCurrentMonth = today.slice(0, 7) === ui.journalMonth;
+    let written = 0;
+    const cells = [];
+    for (let i = 0; i < offset; i += 1) cells.push('<span class="cal-blank"></span>');
+    for (let d = 1; d <= daysInMonth; d += 1) {
+      const key = `${y}-${pad2(m)}-${pad2(d)}`;
+      const entry = entries.get(key);
+      if (entry) written += 1;
+      const cls = ['cal-day'];
+      if (entry) cls.push('has-entry');
+      if (key === today) cls.push('is-today');
+      if (key === ui.journalDate) cls.push('is-selected');
+      const future = key > today;
+      cells.push(`<button type="button" class="${cls.join(' ')}" data-action="journal-date" data-date="${key}"${entry && entry.mood ? ` data-mood="${entry.mood}"` : ''}${future ? ' disabled' : ''} aria-label="${m}月${d}日${entry ? '（日記あり）' : ''}">${d}</button>`);
+    }
+    return `<div class="cal-head">
+        <button type="button" class="icon-btn" data-action="journal-month" data-step="-1" aria-label="前の月">${icon('left')}</button>
+        <span class="cal-title">${y}年${m}月</span>
+        <button type="button" class="icon-btn" data-action="journal-month" data-step="1" aria-label="次の月"${isCurrentMonth ? ' disabled' : ''}>${icon('right')}</button>
+      </div>
+      <div class="cal-grid">
+        ${['月', '火', '水', '木', '金', '土', '日'].map((w) => `<span class="cal-week">${w}</span>`).join('')}
+        ${cells.join('')}
+      </div>
+      <p class="cal-note">この月は ${written} 日書きました・色が濃いほど気分が良かった日</p>`;
+  }
+
+  function viewJournal(ctx) {
+    const { state, today, ui } = ctx;
+    const date = ui.journalDate;
+    const saved = S.getJournal(date);
+    const j = saved || EMPTY_JOURNAL;
+    const p = S.dailyProgress(date);
+    const doneTodos = state.todos.filter((t) => t.completed && t.completedAt && isoToKey(t.completedAt) === date).length;
+    const streak = S.journalStreak(today);
+    const isToday = date === today;
+
+    const moods = MOODS.map((m) => `<label class="mood" data-mood="${m.value}">
+        <input type="radio" name="mood" value="${m.value}"${j.mood === m.value ? ' checked' : ''} data-was-checked="${j.mood === m.value}">
+        <span class="mood-dot" aria-hidden="true"></span><span class="mood-label">${m.label}</span>
+      </label>`).join('');
+    const goods = [0, 1, 2].map((i) => `<div class="good-row">
+        <span class="good-num" aria-hidden="true">${i + 1}</span>
+        <input class="input" name="good${i}" maxlength="${S.LIMITS.journalLine}" value="${esc(j.good[i])}" placeholder="${GOOD_HINTS[i]}" aria-label="良かったこと${i + 1}">
+      </div>`).join('');
+
+    return `<div class="view view-journal">
+      <div data-part="banner">${storageBanner(ctx)}</div>
+      <header class="view-header" data-part="header">
+        <p class="eyebrow">${streak ? `<span class="streak-inline">${icon('flame')}連続 ${streak} 日</span>` : '1日3分の振り返り'}</p>
+        <h1 class="view-title">日記</h1>
+      </header>
+      <div class="journal-datebar" data-part="datebar">
+        <button type="button" class="icon-btn" data-action="journal-prev" aria-label="前の日">${icon('left')}</button>
+        <p class="journal-date">${formatMonthDay(date)}${isToday ? '<span class="pill">今日</span>' : ''}</p>
+        <button type="button" class="icon-btn" data-action="journal-next" aria-label="次の日"${isToday ? ' disabled' : ''}>${icon('right')}</button>
+        ${isToday ? '' : '<button type="button" class="btn btn-ghost btn-sm" data-action="journal-today">今日へ</button>'}
+      </div>
+      <div class="journal-auto" data-part="summary">
+        <span class="stat-chip">${icon('repeat')}Daily ${p.total ? `${p.done} / ${p.total} 完了` : 'なし'}</span>
+        <span class="stat-chip">${icon('check')}ToDo ${doneTodos} 件完了</span>
+      </div>
+      <form class="journal-form" id="journal-form" data-part="editor" data-date="${date}" autocomplete="off" novalidate>
+        <fieldset class="jfield">
+          <legend class="jlabel">今日の気分</legend>
+          <div class="mood-row">${moods}</div>
+        </fieldset>
+        <label class="jfield">
+          <span class="jlabel">今日の1%成長</span>
+          <textarea class="textarea" name="growth" rows="2" maxlength="${S.LIMITS.journalText}" placeholder="昨日の自分より、少しでも前に進めたこと">\n${esc(j.growth)}</textarea>
+        </label>
+        <fieldset class="jfield">
+          <legend class="jlabel">良かったこと</legend>
+          <div class="good-list">${goods}</div>
+        </fieldset>
+        <label class="jfield">
+          <span class="jlabel">明日の自分へ一言</span>
+          <input class="input" name="tomorrow" maxlength="${S.LIMITS.journalLine}" value="${esc(j.tomorrow)}" placeholder="明日いちばん大事にしたいこと">
+        </label>
+        <label class="jfield">
+          <span class="jlabel">自由メモ</span>
+          <textarea class="textarea" name="memo" rows="4" maxlength="${S.LIMITS.journalMemo}" placeholder="考えたこと・出来事など">\n${esc(j.memo)}</textarea>
+        </label>
+        <p class="journal-status" data-journal-status>${saved ? '保存済み' : '入力すると自動で保存されます'}</p>
+      </form>
+      <section class="journal-cal" data-part="calendar" aria-label="日記のカレンダー">${calendar(state, ui, today)}</section>
+    </div>`;
+  }
+
   /* ------------------------------------------------------------------ */
-  const VIEWS = { today: viewToday, daily: viewDaily, todo: viewTodo, matrix: viewMatrix };
+  const VIEWS = {
+    today: viewToday, daily: viewDaily, todo: viewTodo, matrix: viewMatrix, vision: viewVision, journal: viewJournal,
+  };
 
   K.views = {
     icon,
     summarize,
     QUADRANT_INFO,
+    COMPOUND,
+    formatTimes,
     render: (name, ctx) => (VIEWS[name] || viewToday)(ctx),
   };
 })(window.Kojin = window.Kojin || {});

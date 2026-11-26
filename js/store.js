@@ -3,7 +3,11 @@
  *
  * 画面側は store の関数だけを通してデータを変更する。
  * 変更のたびに localStorage へ保存し、subscribe された関数（再描画）を呼ぶ。
- * 将来、外部データベースへ移行する場合はこのファイルの load / persist を差し替える想定。
+ * ユーザー操作による変更は onLocalChange で同期機能（sync.js）にも通知する。
+ *
+ * 保存キー:
+ *   kojintodo:v1               … ToDo・Daily・日記・Vision（文字）・設定
+ *   kojintodo:v1:vision-image  … Vision ボードの画像（サイズが大きいため別に保存）
  */
 (function (K) {
   'use strict';
@@ -11,27 +15,49 @@
   const { dateKey, isDateKey, addDays, weekday, uid } = K.utils;
 
   const STORAGE_KEY = 'kojintodo:v1';
+  const IMAGE_KEY = `${STORAGE_KEY}:vision-image`;
   const SCHEMA_VERSION = 1;
   const QUADRANTS = ['q1', 'q2', 'q3', 'q4'];
   const THEMES = ['auto', 'light', 'dark'];
+  const START_VIEWS = ['today', 'vision', 'journal'];
   const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
   const HISTORY_KEEP_DAYS = 400; // Daily の完了履歴を保持する日数
-  const LIMITS = { title: 200, memo: 2000 };
+  const IMAGE_MAX_CHARS = 900000; // Firestore の 1 ドキュメント上限（1MB）に収まる大きさ
+  const LIMITS = {
+    title: 200,
+    memo: 2000,
+    journalLine: 300,
+    journalText: 1000,
+    journalMemo: 5000,
+    keyword: 80,
+    visionTitle: 80,
+    statement: 2000,
+  };
 
   let state = createEmptyState();
   let storageAvailable = true;
+  let savedImage = null; // localStorage に保存済みの画像（同じなら書き込まない）
   const listeners = new Set();
-  const localChangeListeners = new Set(); // 同期機能（sync.js）が、端末内での変更を受け取る
+  const localChangeListeners = new Set();
 
   function createEmptyState() {
-    return { version: SCHEMA_VERSION, todos: [], dailies: [], settings: { theme: 'auto' } };
+    return {
+      version: SCHEMA_VERSION,
+      todos: [],
+      dailies: [],
+      journals: [],
+      vision: null,
+      visionImage: null,
+      settings: { theme: 'auto', startView: 'today' },
+    };
   }
 
   /* ------------------------------------------------------------------
-   * 正規化（読み込み・インポート時に壊れたデータを取り除く）
+   * 正規化（読み込み・インポート・同期時に壊れたデータを取り除く）
    * ------------------------------------------------------------------ */
   const text = (v, max) => (typeof v === 'string' ? v : '').slice(0, max);
   const isoOr = (v, fallback) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? v : fallback);
+  const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
   function normalizeTodo(t) {
     if (!t || typeof t !== 'object') return null;
@@ -89,23 +115,107 @@
     return out;
   }
 
+  /** 日記（1日1件。id は日付） */
+  function normalizeJournal(j) {
+    if (!j || typeof j !== 'object') return null;
+    const date = isDateKey(j.date) ? j.date : (isDateKey(j.id) ? j.id : null);
+    if (!date) return null;
+    const now = new Date().toISOString();
+    const good = (Array.isArray(j.good) ? j.good : []).slice(0, 3).map((g) => text(g, LIMITS.journalLine));
+    while (good.length < 3) good.push('');
+    const mood = Number(j.mood);
+    return {
+      id: date,
+      date,
+      mood: Number.isInteger(mood) && mood >= 1 && mood <= 5 ? mood : null,
+      growth: text(j.growth, LIMITS.journalText),
+      good,
+      tomorrow: text(j.tomorrow, LIMITS.journalLine),
+      memo: text(j.memo, LIMITS.journalMemo),
+      createdAt: isoOr(j.createdAt, now),
+      updatedAt: isoOr(j.updatedAt, now),
+    };
+  }
+
+  const isJournalEmpty = (j) => !j.mood && !j.growth.trim() && !j.tomorrow.trim() && !j.memo.trim()
+    && j.good.every((g) => !g.trim());
+
+  function normalizeJournals(list) {
+    const byDate = new Map();
+    (Array.isArray(list) ? list : []).forEach((raw) => {
+      const j = normalizeJournal(raw);
+      if (!j || isJournalEmpty(j)) return;
+      const prev = byDate.get(j.date);
+      if (!prev || j.updatedAt > prev.updatedAt) byDate.set(j.date, j);
+    });
+    return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  /** Vision の文字情報（タイトル・キーワード・なりたい姿） */
+  function normalizeVision(v) {
+    if (!v || typeof v !== 'object') return null;
+    const keywords = (Array.isArray(v.keywords) ? v.keywords : [])
+      .map((k) => text(k, LIMITS.keyword).trim())
+      .filter(Boolean)
+      .slice(0, 12);
+    const year = Number(v.year);
+    const vision = {
+      id: 'main',
+      title: text(v.title, LIMITS.visionTitle).trim(),
+      year: Number.isInteger(year) && year >= 2000 && year <= 2100 ? year : null,
+      keywords,
+      statement: text(v.statement, LIMITS.statement),
+      updatedAt: isoOr(v.updatedAt, new Date().toISOString()),
+    };
+    return vision.title || vision.keywords.length || vision.statement.trim() || vision.year ? vision : null;
+  }
+
+  const DATA_URL_RE = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/;
+
+  /** Vision ボードの画像（圧縮済みの data URL） */
+  function normalizeVisionImage(v) {
+    if (!v || typeof v !== 'object' || typeof v.dataUrl !== 'string') return null;
+    if (v.dataUrl.length > IMAGE_MAX_CHARS || !DATA_URL_RE.test(v.dataUrl)) return null;
+    const dim = (n) => (Number.isInteger(n) && n > 0 && n < 20000 ? n : null);
+    return {
+      id: 'image',
+      dataUrl: v.dataUrl,
+      width: dim(v.width),
+      height: dim(v.height),
+      updatedAt: isoOr(v.updatedAt, new Date().toISOString()),
+    };
+  }
+
   function normalizeState(data) {
-    if (!data || typeof data !== 'object' || (!Array.isArray(data.todos) && !Array.isArray(data.dailies))) {
-      throw new Error('Kojin ToDo のデータ形式ではありません');
-    }
+    const hasData = data && typeof data === 'object' && ['todos', 'dailies', 'journals'].some((k) => Array.isArray(data[k]));
+    if (!hasData) throw new Error('Kojin ToDo のデータ形式ではありません');
     const s = createEmptyState();
     s.todos = normalizeList(data.todos, normalizeTodo);
     s.dailies = normalizeList(data.dailies, normalizeDaily);
-    const theme = data.settings && data.settings.theme;
-    s.settings.theme = THEMES.includes(theme) ? theme : 'auto';
+    s.journals = normalizeJournals(data.journals);
+    s.vision = normalizeVision(data.vision);
+    s.visionImage = normalizeVisionImage(data.visionImage);
+    const settings = data.settings || {};
+    s.settings.theme = THEMES.includes(settings.theme) ? settings.theme : 'auto';
+    s.settings.startView = START_VIEWS.includes(settings.startView) ? settings.startView : 'today';
     return s;
   }
 
   /* ------------------------------------------------------------------
    * 保存・読み込み
    * ------------------------------------------------------------------ */
+  function loadImage() {
+    try {
+      const raw = localStorage.getItem(IMAGE_KEY);
+      return raw ? normalizeVisionImage(JSON.parse(raw)) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   function load() {
     let raw = null;
+    let result;
     try {
       raw = localStorage.getItem(STORAGE_KEY);
     } catch (e) {
@@ -115,25 +225,39 @@
     }
     if (raw == null) {
       state = createEmptyState();
-      return { status: 'empty' };
+      result = { status: 'empty' };
+    } else {
+      try {
+        state = normalizeState(JSON.parse(raw));
+        result = { status: 'ok' };
+      } catch (e) {
+        // 壊れたデータは消さずに退避してから空の状態で始める
+        try { localStorage.setItem(`${STORAGE_KEY}:broken:${Date.now()}`, raw); } catch (_) { /* noop */ }
+        state = createEmptyState();
+        result = { status: 'corrupt' };
+      }
     }
-    try {
-      state = normalizeState(JSON.parse(raw));
-      return { status: 'ok' };
-    } catch (e) {
-      // 壊れたデータは消さずに退避してから空の状態で始める
-      try { localStorage.setItem(`${STORAGE_KEY}:broken:${Date.now()}`, raw); } catch (_) { /* noop */ }
-      state = createEmptyState();
-      return { status: 'corrupt' };
-    }
+    state.visionImage = loadImage();
+    savedImage = state.visionImage;
+    return result;
   }
 
   function persist() {
+    const { visionImage, ...main } = state;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(main));
       storageAvailable = true;
     } catch (e) {
       storageAvailable = false;
+    }
+    if (visionImage !== savedImage) {
+      try {
+        if (visionImage) localStorage.setItem(IMAGE_KEY, JSON.stringify(visionImage));
+        else localStorage.removeItem(IMAGE_KEY);
+        savedImage = visionImage;
+      } catch (e) {
+        // 容量不足で画像だけ保存できない場合も、画面とクラウド（同期中）には残る
+      }
     }
   }
 
@@ -151,10 +275,11 @@
    * 同期用のフック
    *   ユーザー操作による変更は emitLocal で「変更内容（ops）」として通知する。
    *   op の形式:
-   *     { kind: 'todos' | 'dailies', type: 'set', item }       … 追加・更新
-   *     { kind: 'todos' | 'dailies', type: 'delete', id }      … 削除
+   *     { kind, type: 'set', item }   … 追加・更新（kind: todos / dailies / journals / vision）
+   *     { kind, type: 'delete', id }  … 削除
    *     { kind: 'dailies', type: 'done', id, key, done, updatedAt } … Daily の完了チェック
-   *     { type: 'replaceAll', todos, dailies }                 … インポート・全削除
+   *     { type: 'replaceAll', todos, dailies, journals, vision }    … インポート・全削除
+   *   vision は id が 'main'（文字情報）と 'image'（画像）の2件。
    * ------------------------------------------------------------------ */
   function onLocalChange(fn) {
     localChangeListeners.add(fn);
@@ -166,26 +291,55 @@
     localChangeListeners.forEach((fn) => fn(ops));
   }
 
-  const byCreated = (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
-
-  /** クラウドから受け取ったデータで ToDo・Daily を置き換える（変更がなければ何もしない） */
-  function replaceCollections({ todos, dailies }) {
-    const nextTodos = normalizeList(todos, normalizeTodo).sort(byCreated);
-    const nextDailies = normalizeList(dailies, normalizeDaily).sort(byCreated);
-    const same = JSON.stringify(nextTodos) === JSON.stringify(state.todos.slice().sort(byCreated))
-      && JSON.stringify(nextDailies) === JSON.stringify(state.dailies.slice().sort(byCreated));
-    if (same) return false;
-    state.todos = nextTodos;
-    state.dailies = nextDailies;
-    commit();
-    return true;
+  /** 同期用に、現在のデータを種類ごとの配列で返す */
+  function snapshotForSync() {
+    return {
+      todos: state.todos.map((t) => ({ ...t })),
+      dailies: state.dailies.map((d) => ({ ...d, days: d.days.slice(), doneDates: d.doneDates.slice() })),
+      journals: state.journals.map((j) => ({ ...j, good: j.good.slice() })),
+      vision: [state.vision, state.visionImage].filter(Boolean).map((v) => ({ ...v })),
+    };
   }
 
-  /** ログアウト時：この端末のタスクを消去する（テーマ設定は残す） */
+  const byCreated = (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+
+  /** クラウドから受け取ったデータで置き換える（変更がなければ何もしない） */
+  function replaceCollections({ todos, dailies, journals, vision }) {
+    let changed = false;
+    if (todos) {
+      const next = normalizeList(todos, normalizeTodo).sort(byCreated);
+      if (!sameJson(next, state.todos.slice().sort(byCreated))) { state.todos = next; changed = true; }
+    }
+    if (dailies) {
+      const next = normalizeList(dailies, normalizeDaily).sort(byCreated);
+      if (!sameJson(next, state.dailies.slice().sort(byCreated))) { state.dailies = next; changed = true; }
+    }
+    if (journals) {
+      const next = normalizeJournals(journals);
+      if (!sameJson(next, state.journals)) { state.journals = next; changed = true; }
+    }
+    if (vision) {
+      const main = normalizeVision(vision.find((v) => v && v.id === 'main'));
+      if (!sameJson(main, state.vision)) { state.vision = main; changed = true; }
+      const image = normalizeVisionImage(vision.find((v) => v && v.id === 'image'));
+      const current = state.visionImage;
+      const imageChanged = Boolean(image) !== Boolean(current)
+        || (image && (image.updatedAt !== current.updatedAt || image.dataUrl.length !== current.dataUrl.length));
+      if (imageChanged) { state.visionImage = image; changed = true; }
+    }
+    if (changed) commit();
+    return changed;
+  }
+
+  function keepSettings() {
+    const next = createEmptyState();
+    next.settings = { ...state.settings };
+    return next;
+  }
+
+  /** ログアウト時：この端末のデータを消去する（設定は残す） */
   function clearLocalData() {
-    const theme = state.settings.theme;
-    state = createEmptyState();
-    state.settings.theme = theme;
+    state = keepSettings();
     commit();
   }
 
@@ -356,12 +510,103 @@
     return out;
   }
 
+  /** その日の Daily の達成状況 */
+  function dailyProgress(key) {
+    const scheduled = state.dailies.filter((d) => isScheduled(d, key));
+    return { total: scheduled.length, done: scheduled.filter((d) => isDone(d, key)).length };
+  }
+
+  /* ------------------------------------------------------------------
+   * 日記
+   * ------------------------------------------------------------------ */
+  const findJournal = (date) => state.journals.find((j) => j.date === date) || null;
+  const byDate = (a, b) => a.date.localeCompare(b.date);
+
+  /** 日記を保存する。すべて空になった場合は削除する */
+  function saveJournal(date, fields) {
+    if (!isDateKey(date)) return null;
+    const prev = findJournal(date);
+    const now = new Date().toISOString();
+    const next = normalizeJournal({ ...(prev || {}), ...fields, date, createdAt: prev ? prev.createdAt : now, updatedAt: now });
+    if (prev && sameJson({ ...next, updatedAt: prev.updatedAt }, prev)) return prev; // 変更なし
+    if (isJournalEmpty(next)) {
+      if (!prev) return null;
+      state.journals = state.journals.filter((j) => j.date !== date);
+      commit();
+      emitLocal([{ kind: 'journals', type: 'delete', id: date }]);
+      return null;
+    }
+    state.journals = state.journals.filter((j) => j.date !== date).concat(next).sort(byDate);
+    commit();
+    emitLocal([{ kind: 'journals', type: 'set', item: { ...next, good: next.good.slice() } }]);
+    return next;
+  }
+
+  /** 日記の連続記録日数（今日がまだなら昨日までを数える） */
+  function journalStreak(today) {
+    const dates = new Set(state.journals.map((j) => j.date));
+    let key = dates.has(today) ? today : addDays(today, -1);
+    let count = 0;
+    while (dates.has(key) && count < 3660) {
+      count += 1;
+      key = addDays(key, -1);
+    }
+    return count;
+  }
+
+  /**
+   * 「1%前進した日」の一覧（古い順）。
+   * その日の Daily をすべて完了した日、または日記に「今日の1%成長」を書いた日を数える。
+   */
+  function growthDays(today) {
+    const days = new Set(state.journals.filter((j) => j.growth.trim() && j.date <= today).map((j) => j.date));
+    const candidates = new Set();
+    state.dailies.forEach((d) => d.doneDates.forEach((k) => { if (k <= today) candidates.add(k); }));
+    candidates.forEach((k) => {
+      if (days.has(k)) return;
+      const p = dailyProgress(k);
+      if (p.total > 0 && p.done === p.total) days.add(k);
+    });
+    return [...days].sort();
+  }
+
+  /* ------------------------------------------------------------------
+   * Vision
+   * ------------------------------------------------------------------ */
+  function saveVision(fields) {
+    const next = normalizeVision({ ...(state.vision || {}), ...fields, updatedAt: new Date().toISOString() });
+    if (!next && !state.vision) return null;
+    state.vision = next;
+    commit();
+    emitLocal([next
+      ? { kind: 'vision', type: 'set', item: { ...next, keywords: next.keywords.slice() } }
+      : { kind: 'vision', type: 'delete', id: 'main' }]);
+    return next;
+  }
+
+  /** 画像を設定する（null で削除）。形式・サイズが不正なら false */
+  function setVisionImage(image) {
+    const next = image ? normalizeVisionImage({ ...image, updatedAt: new Date().toISOString() }) : null;
+    if (image && !next) return false;
+    if (!next && !state.visionImage) return true;
+    state.visionImage = next;
+    commit();
+    emitLocal([next ? { kind: 'vision', type: 'set', item: { ...next } } : { kind: 'vision', type: 'delete', id: 'image' }]);
+    return true;
+  }
+
   /* ------------------------------------------------------------------
    * 設定・データ管理
    * ------------------------------------------------------------------ */
   function setTheme(theme) {
     if (!THEMES.includes(theme)) return;
     state.settings.theme = theme;
+    commit();
+  }
+
+  function setStartView(view) {
+    if (!START_VIEWS.includes(view)) return;
+    state.settings.startView = view;
     commit();
   }
 
@@ -374,16 +619,14 @@
     const next = normalizeState(JSON.parse(jsonText));
     state = next;
     commit();
-    emitLocal([{ type: 'replaceAll', todos: state.todos.map((t) => ({ ...t })), dailies: state.dailies.map((d) => ({ ...d })) }]);
-    return { todos: next.todos.length, dailies: next.dailies.length };
+    emitLocal([{ type: 'replaceAll', ...snapshotForSync() }]);
+    return { todos: next.todos.length, dailies: next.dailies.length, journals: next.journals.length };
   }
 
   function resetAll() {
-    const theme = state.settings.theme;
-    state = createEmptyState();
-    state.settings.theme = theme;
+    state = keepSettings();
     commit();
-    emitLocal([{ type: 'replaceAll', todos: [], dailies: [] }]);
+    emitLocal([{ type: 'replaceAll', ...snapshotForSync() }]);
   }
 
   function addSampleData() {
@@ -422,18 +665,23 @@
 
   K.store = {
     STORAGE_KEY,
+    IMAGE_KEY,
     QUADRANTS,
     ALL_DAYS,
+    START_VIEWS,
     LIMITS,
+    IMAGE_MAX_CHARS,
     load,
     subscribe,
     onLocalChange,
+    snapshotForSync,
     replaceCollections,
     clearLocalData,
     getState: () => state,
     isStorageAvailable: () => storageAvailable,
     getTodo: findTodo,
     getDaily: findDaily,
+    getJournal: findJournal,
     addTodo,
     updateTodo,
     setTodoCompleted,
@@ -450,7 +698,14 @@
     isDone,
     streak,
     history,
+    dailyProgress,
+    saveJournal,
+    journalStreak,
+    growthDays,
+    saveVision,
+    setVisionImage,
     setTheme,
+    setStartView,
     exportJson,
     importJson,
     resetAll,

@@ -7,7 +7,8 @@
  * - Firestore のオフライン保存を有効にしているため、圏外での変更はつながった時点で送信される
  * - Firebase の読み込み前など、まだ送れない変更は「送信待ち（outbox）」として localStorage に保管する
  *
- * クラウド上の保存場所: users/{uid}/todos/{id}, users/{uid}/dailies/{id}
+ * クラウド上の保存場所: users/{uid}/todos/{id}, users/{uid}/dailies/{id},
+ *                       users/{uid}/journals/{日付}, users/{uid}/vision/main・image
  * （セキュリティルールで、本人の uid 以下だけを読み書きできるようにする）
  */
 (function (K) {
@@ -16,7 +17,7 @@
   const S = K.store;
   const SDK_BASE = 'https://www.gstatic.com/firebasejs/10.14.1';
   const SDK_FILES = ['firebase-app-compat.js', 'firebase-auth-compat.js', 'firebase-firestore-compat.js'];
-  const KINDS = ['todos', 'dailies'];
+  const KINDS = ['todos', 'dailies', 'journals', 'vision'];
   const BATCH_LIMIT = 400; // Firestore の一括書き込みは 500 件まで
   const UID_KEY = `${S.STORAGE_KEY}:sync-uid`;
   const OUTBOX_KEY = `${S.STORAGE_KEY}:sync-outbox`;
@@ -41,12 +42,18 @@
   let active = false;   // 変更をそのまま Firestore に書き込める状態
   let unsubscribers = [];
   let remote = emptyRemote();
-  let received = { todos: false, dailies: false };
-  let pendingWrites = { todos: false, dailies: false };
+  let received = emptyFlags();
+  let pendingWrites = emptyFlags();
 
   function emptyRemote() {
-    return { todos: new Map(), dailies: new Map() };
+    return Object.fromEntries(KINDS.map((kind) => [kind, new Map()]));
   }
+
+  function emptyFlags() {
+    return Object.fromEntries(KINDS.map((kind) => [kind, false]));
+  }
+
+  const allReceived = () => KINDS.every((kind) => received[kind]);
 
   function setStatus(patch) {
     Object.assign(status, patch);
@@ -154,6 +161,7 @@
   function replaceAllRemote(op) {
     const writes = [];
     KINDS.forEach((kind) => {
+      if (!Array.isArray(op[kind])) return; // 以前の形式の送信待ちには、含まれない種類がある
       const keep = new Set(op[kind].map((item) => item.id));
       remote[kind].forEach((_, id) => {
         if (!keep.has(id)) writes.push((b) => b.delete(col(kind).doc(id)));
@@ -209,7 +217,7 @@
 
   /** この端末で初めてログインしたとき、端末内のデータをクラウドへ統合する */
   function mergeLocalIntoRemote() {
-    const local = S.getState();
+    const local = S.snapshotForSync();
     const uploads = [];
     KINDS.forEach((kind) => {
       local[kind].forEach((item) => {
@@ -223,10 +231,10 @@
       });
     });
     if (!uploads.length) return;
-    const remoteCount = remote.todos.size + remote.dailies.size;
+    const remoteCount = KINDS.reduce((n, kind) => n + remote[kind].size, 0);
     if (remoteCount > 0) {
       const ok = window.confirm(
-        `この端末に保存されているタスク ${uploads.length} 件を、クラウドのデータに追加しますか？\n\n`
+        `この端末に保存されているデータ ${uploads.length} 件（タスク・日記など）を、クラウドのデータに追加しますか？\n\n`
         + 'OK：追加する\nキャンセル：追加せず、クラウドのデータを表示する',
       );
       if (!ok) return;
@@ -244,13 +252,14 @@
       setStatus({ state: 'error' });
       return;
     }
-    const busy = !received.todos || !received.dailies || pendingWrites.todos || pendingWrites.dailies;
+    const busy = !allReceived() || KINDS.some((kind) => pendingWrites[kind]);
     setStatus({ state: busy ? 'syncing' : 'synced' });
   }
 
   function listen() {
     remote = emptyRemote();
-    received = { todos: false, dailies: false };
+    received = emptyFlags();
+    pendingWrites = emptyFlags();
     unsubscribers = KINDS.map((kind) => col(kind).onSnapshot({ includeMetadataChanges: true }, (snap) => {
       snap.docChanges().forEach((change) => {
         if (change.type === 'removed') remote[kind].delete(change.doc.id);
@@ -260,8 +269,8 @@
       if (snap.metadata.fromCache && remote[kind].size === 0 && navigator.onLine) return;
       received[kind] = true;
       pendingWrites[kind] = snap.metadata.hasPendingWrites;
-      if (received.todos && received.dailies) {
-        S.replaceCollections({ todos: [...remote.todos.values()], dailies: [...remote.dailies.values()] });
+      if (allReceived()) {
+        S.replaceCollections(Object.fromEntries(KINDS.map((k) => [k, [...remote[k].values()]])));
       }
       if (status.error && !snap.metadata.fromCache) setStatus({ error: '' });
       refreshState();
@@ -303,7 +312,8 @@
     starting = false;
     active = false;
     remote = emptyRemote();
-    received = { todos: false, dailies: false };
+    received = emptyFlags();
+    pendingWrites = emptyFlags();
     if (!wasSignedIn) {
       // 起動時にログインが切れていた場合は、この端末だけで使う状態に戻す
       removeKey(UID_KEY);
