@@ -17,4 +17,11 @@
  *   appId: '1:000000000000:web:xxxxxxxxxxxx',
  * };
  */
-window.KOJIN_FIREBASE_CONFIG = null;
+window.KOJIN_FIREBASE_CONFIG = {
+  apiKey: 'AIzaSyDXTrJlsPK0kxXGCWzyrMwWZSV6wneS25E',
+  authDomain: 'kojintodo.firebaseapp.com',
+  projectId: 'kojintodo',
+  storageBucket: 'kojintodo.firebasestorage.app',
+  messagingSenderId: '291234355808',
+  appId: '1:291234355808:web:436038c679b147da314105',
+};
