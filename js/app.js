@@ -1,5 +1,5 @@
 /**
- * app.js — 画面の切り替え・操作イベント・ダイアログ・ドラッグ＆ドロップ
+ * app.js — 画面の切り替え・操作イベント・ダイアログ・ドラッグ＆ドロップ・演出
  */
 (function (K) {
   'use strict';
@@ -8,22 +8,35 @@
   const S = K.store;
   const V = K.views;
 
-  const VIEWS = ['today', 'daily', 'todo', 'matrix'];
-  const VIEW_TITLES = { today: '今日', daily: 'Daily', todo: 'ToDo', matrix: 'マトリクス' };
+  const VIEWS = ['today', 'daily', 'todo', 'matrix', 'vision', 'journal'];
+  const VIEW_TITLES = {
+    today: '今日', daily: 'Daily', todo: 'ToDo', matrix: 'マトリクス', vision: 'Vision', journal: '日記',
+  };
+  // 「タスク」と「ライフ」のどちらの画面か
+  const VIEW_MODE = {
+    today: 'task', daily: 'task', todo: 'task', matrix: 'task', vision: 'life', journal: 'life',
+  };
   const CHECK_ANIMATION_MS = 220;
+  const JOURNAL_SAVE_DELAY = 600;
+  const IMAGE_TARGET_CHARS = 700000; // 圧縮後の画像の目安（Firestore の上限に余裕を持たせる）
 
   const ui = {
     view: 'today',
     todoFilter: 'open',
     folds: { doneToday: false },
     renderedDay: U.dateKey(),
+    lastByMode: { task: 'today', life: 'vision' },
+    journalDate: U.dateKey(),
+    journalMonth: U.dateKey().slice(0, 7),
   };
   let pendingFocus = null; // 再描画後にフォーカスを戻す要素のセレクタ
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const appEl = $('.app');
   const viewEl = $('#view');
   const touchQuery = window.matchMedia('(hover: none) and (pointer: coarse)');
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const isTouch = () => touchQuery.matches;
 
   /* ------------------------------------------------------------------
@@ -47,6 +60,12 @@
     if (el.dataset.action === 'set-filter') {
       return { selector: `[data-action="set-filter"][data-filter="${el.dataset.filter}"]` };
     }
+    if (el.dataset.action === 'journal-date') {
+      return { selector: `[data-action="journal-date"][data-date="${el.dataset.date}"]` };
+    }
+    if (el.dataset.action) {
+      return { selector: `[data-action="${el.dataset.action}"]` };
+    }
     return null;
   }
 
@@ -59,6 +78,26 @@
     if (typeof focus.start === 'number' && el.setSelectionRange) el.setSelectionRange(focus.start, focus.end);
   }
 
+  /**
+   * 日記の入力欄は再描画で作り直さない（入力中の文字・カーソル・日本語変換を守るため）。
+   * 同じ日付の入力欄が表示中なら、それ以外の部分（data-part）だけを差し替える。
+   */
+  function patchJournalView(html) {
+    const editor = $('#journal-form', viewEl);
+    if (!editor || editor.dataset.date !== ui.journalDate) return false;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    const next = tmp.firstElementChild;
+    const current = viewEl.firstElementChild;
+    $$(':scope > [data-part]', next).forEach((part) => {
+      if (part.dataset.part === 'editor') return;
+      const old = $(`:scope > [data-part="${part.dataset.part}"]`, current);
+      if (old) old.replaceWith(part);
+    });
+    if (!editor.contains(document.activeElement) && !journal.dirty) fillJournalForm(editor, S.getJournal(ui.journalDate));
+    return true;
+  }
+
   function render() {
     const today = U.dateKey();
     ui.renderedDay = today;
@@ -66,9 +105,12 @@
     pendingFocus = null;
 
     const ctx = { state: S.getState(), today, ui, storageOk: S.isStorageAvailable(), touch: isTouch() };
-    viewEl.innerHTML = V.render(ui.view, ctx);
+    const html = V.render(ui.view, ctx);
+    if (!(ui.view === 'journal' && patchJournalView(html))) {
+      viewEl.innerHTML = html;
+      restoreFocus(focus);
+    }
     updateNav(ctx);
-    restoreFocus(focus);
   }
 
   function updateNav(ctx) {
@@ -79,6 +121,7 @@
       daily: sum.scheduled.length ? `${sum.dailyDone}/${sum.scheduled.length}` : '',
       todo: sum.open.length || '',
       matrix: '',
+      journal: S.getJournal(ctx.today) ? '✓' : '',
     };
     $$('[data-count]').forEach((el) => { el.textContent = counts[el.dataset.count]; });
     $$('[data-badge="today"]').forEach((el) => {
@@ -89,6 +132,10 @@
       if (a.dataset.nav === ui.view) a.setAttribute('aria-current', 'page');
       else a.removeAttribute('aria-current');
     });
+    const mode = VIEW_MODE[ui.view];
+    ui.lastByMode[mode] = ui.view;
+    appEl.dataset.mode = mode;
+    $$('[data-action="set-mode"]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
     document.title = `${VIEW_TITLES[ui.view]} — Kojin ToDo`;
   }
 
@@ -115,7 +162,8 @@
     if (theme === 'light' || theme === 'dark') root.setAttribute('data-theme', theme);
     else root.removeAttribute('data-theme');
     const dark = theme === 'dark' || (theme === 'auto' && darkQuery.matches);
-    $('meta[name="theme-color"]').setAttribute('content', dark ? '#0f1115' : '#f5f6f8');
+    const meta = $('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', dark ? '#0f1115' : '#f5f6f8');
   }
 
   /* ------------------------------------------------------------------
@@ -146,6 +194,106 @@
     toastEl.classList.add('is-show');
     clearTimeout(toastTimer);
     toastTimer = setTimeout(hideToast, duration);
+  }
+
+  /* ------------------------------------------------------------------
+   * 演出：チェック時の振動と、Daily をすべて完了したときのお祝い
+   * ------------------------------------------------------------------ */
+  function vibrate(pattern) {
+    try {
+      if (navigator.vibrate) navigator.vibrate(pattern); // Android のみ対応（iPhone では何もしない）
+    } catch (e) { /* noop */ }
+  }
+
+  const celebrateEl = $('#celebrate');
+  const confettiCanvas = $('.celebrate-canvas', celebrateEl);
+  let celebrateTimer = null;
+  let confettiFrame = null;
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function runConfetti() {
+    const canvas = confettiCanvas;
+    const ctx = canvas.getContext('2d');
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    ctx.scale(dpr, dpr);
+    const colors = ['--accent', '--q1', '--q3', '--success', '--warn'].map(cssVar).filter(Boolean);
+    const pieces = Array.from({ length: 150 }, (_, i) => ({
+      x: w / 2 + (Math.random() - 0.5) * 80,
+      y: h * 0.42,
+      vx: (Math.random() - 0.5) * 16,
+      vy: -8 - Math.random() * 12,
+      size: 5 + Math.random() * 6,
+      rot: Math.random() * Math.PI,
+      vr: (Math.random() - 0.5) * 0.4,
+      color: colors[i % colors.length],
+    }));
+    const startedAt = performance.now();
+    cancelAnimationFrame(confettiFrame);
+    const step = (now) => {
+      const t = now - startedAt;
+      ctx.clearRect(0, 0, w, h);
+      pieces.forEach((p) => {
+        p.vy += 0.42;
+        p.vx *= 0.985;
+        p.x += p.vx;
+        p.y += p.vy;
+        p.rot += p.vr;
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, 1 - t / 2600);
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.size / 2, -p.size / 3, p.size, p.size * 0.66);
+        ctx.restore();
+      });
+      if (t < 2600) confettiFrame = requestAnimationFrame(step);
+      else ctx.clearRect(0, 0, w, h);
+    };
+    confettiFrame = requestAnimationFrame(step);
+  }
+
+  function closeCelebrate() {
+    clearTimeout(celebrateTimer);
+    celebrateEl.classList.remove('is-show');
+    setTimeout(() => { if (!celebrateEl.classList.contains('is-show')) celebrateEl.hidden = true; }, 260);
+  }
+
+  function celebrate({ title, text, meter }) {
+    vibrate([20, 60, 30]);
+    if (reducedMotion.matches) {
+      toast(`${title}　${text}`);
+      return;
+    }
+    $('[data-celebrate-title]', celebrateEl).textContent = title;
+    $('[data-celebrate-text]', celebrateEl).textContent = text;
+    $('[data-celebrate-meter]', celebrateEl).textContent = meter || '';
+    celebrateEl.hidden = false;
+    requestAnimationFrame(() => celebrateEl.classList.add('is-show'));
+    runConfetti();
+    clearTimeout(celebrateTimer);
+    celebrateTimer = setTimeout(closeCelebrate, 3200);
+  }
+
+  celebrateEl.addEventListener('click', closeCelebrate);
+
+  /** Daily のチェックで「今日の Daily をすべて完了」になったらお祝いする */
+  function celebrateIfDayComplete(before) {
+    const today = U.dateKey();
+    const after = S.dailyProgress(today);
+    if (!(after.total > 0 && after.done === after.total && before.done < before.total)) return;
+    const n = S.growthDays(today).length;
+    celebrate({
+      title: 'Day complete',
+      text: `今日の Daily ${after.total} 件をすべて完了しました`,
+      meter: `1.01^${n} = ×${V.formatTimes(V.COMPOUND ** n)}`,
+    });
   }
 
   /* ------------------------------------------------------------------
@@ -330,6 +478,225 @@
   dailyDialog.addEventListener('close', () => { dialogSourceForm = null; });
 
   /* ------------------------------------------------------------------
+   * 日記（自動保存）
+   * ------------------------------------------------------------------ */
+  const journal = { timer: null, dirty: false };
+
+  function readJournalForm(form) {
+    const f = form.elements;
+    const mood = $('input[name="mood"]:checked', form);
+    return {
+      mood: mood ? Number(mood.value) : null,
+      growth: f.growth.value,
+      good: [f.good0.value, f.good1.value, f.good2.value],
+      tomorrow: f.tomorrow.value,
+      memo: f.memo.value,
+    };
+  }
+
+  function fillJournalForm(form, entry) {
+    const j = entry || { mood: null, growth: '', good: ['', '', ''], tomorrow: '', memo: '' };
+    const f = form.elements;
+    const set = (el, value) => { if (el.value !== value) el.value = value; };
+    set(f.growth, j.growth);
+    set(f.good0, j.good[0]);
+    set(f.good1, j.good[1]);
+    set(f.good2, j.good[2]);
+    set(f.tomorrow, j.tomorrow);
+    set(f.memo, j.memo);
+    $$('input[name="mood"]', form).forEach((r) => {
+      r.checked = Number(r.value) === j.mood;
+      r.dataset.wasChecked = String(r.checked);
+    });
+  }
+
+  function setJournalStatus(text) {
+    const el = $('[data-journal-status]', viewEl);
+    if (el) el.textContent = text;
+  }
+
+  function flushJournal() {
+    clearTimeout(journal.timer);
+    journal.timer = null;
+    if (!journal.dirty) return;
+    journal.dirty = false;
+    const form = $('#journal-form', viewEl);
+    if (!form) return;
+    const saved = S.saveJournal(form.dataset.date, readJournalForm(form));
+    const time = new Date().toTimeString().slice(0, 5);
+    setJournalStatus(saved ? `保存しました（${time}）` : '入力すると自動で保存されます');
+  }
+
+  function scheduleJournalSave() {
+    journal.dirty = true;
+    setJournalStatus('入力中…');
+    clearTimeout(journal.timer);
+    journal.timer = setTimeout(flushJournal, JOURNAL_SAVE_DELAY);
+  }
+
+  viewEl.addEventListener('input', (e) => {
+    if (e.target.closest('#journal-form') && e.target.name !== 'mood') scheduleJournalSave();
+  });
+  viewEl.addEventListener('change', (e) => {
+    if (!e.target.closest('#journal-form')) return;
+    journal.dirty = true;
+    flushJournal();
+  });
+  viewEl.addEventListener('focusout', (e) => {
+    if (e.target.closest('#journal-form')) flushJournal();
+  });
+  // 選択中の気分をもう一度押したら選択を外す
+  viewEl.addEventListener('click', (e) => {
+    const input = e.target.closest('.mood input');
+    if (!input) return;
+    if (input.dataset.wasChecked === 'true') {
+      input.checked = false;
+      journal.dirty = true;
+      flushJournal();
+    }
+    $$('.mood input', viewEl).forEach((r) => { r.dataset.wasChecked = String(r.checked); });
+  });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) flushJournal(); });
+  window.addEventListener('pagehide', flushJournal);
+
+  function setJournalDate(date) {
+    flushJournal();
+    const today = U.dateKey();
+    const next = date > today ? today : date;
+    ui.journalDate = next;
+    ui.journalMonth = next.slice(0, 7);
+    render();
+  }
+
+  function shiftJournalMonth(step) {
+    const [y, m] = ui.journalMonth.split('-').map(Number);
+    const d = new Date(y, m - 1 + step, 1);
+    const month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    if (month > U.dateKey().slice(0, 7)) return;
+    ui.journalMonth = month;
+    render();
+  }
+
+  /* ------------------------------------------------------------------
+   * Vision
+   * ------------------------------------------------------------------ */
+  const visionDialog = $('#vision-dialog');
+  const visionForm = $('#vision-form');
+  const visionFile = $('#vision-file');
+  const lightbox = $('#vision-lightbox');
+
+  function updateVisionThumb() {
+    const img = S.getState().visionImage;
+    const thumb = $('.vision-thumb', visionForm);
+    thumb.hidden = !img;
+    if (img) thumb.src = img.dataUrl;
+    else thumb.removeAttribute('src');
+    $('[data-vision-remove]', visionForm).hidden = !img;
+  }
+
+  function openVisionDialog() {
+    const v = S.getState().vision;
+    const f = visionForm.elements;
+    const titleYear = v && v.title && v.title.match(/20\d{2}/);
+    f.title.value = v ? v.title : '';
+    f.year.value = (v && v.year) || (titleYear ? titleYear[0] : new Date().getFullYear() + 1);
+    f.keywords.value = v ? v.keywords.join('\n') : '';
+    f.statement.value = v ? v.statement : '';
+    showFieldError(visionForm, 'year', false);
+    updateVisionThumb();
+    visionDialog.showModal();
+  }
+
+  visionForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const f = visionForm.elements;
+    const yearText = f.year.value.trim();
+    const year = yearText ? Number(yearText) : null;
+    if (yearText && !(Number.isInteger(year) && year >= 2000 && year <= 2100)) {
+      showFieldError(visionForm, 'year', true);
+      f.year.focus();
+      return;
+    }
+    S.saveVision({
+      title: f.title.value,
+      year,
+      keywords: f.keywords.value.split('\n'),
+      statement: f.statement.value,
+    });
+    visionDialog.close();
+    toast('Vision を保存しました');
+  });
+
+  function loadImage(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => resolve({ img, url });
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('decode')); };
+      img.src = url;
+    });
+  }
+
+  /** 画像を JPEG に変換し、目安のサイズに収まるまで画質・大きさを下げる */
+  async function compressImage(file) {
+    const { img, url } = await loadImage(file);
+    try {
+      let scale = Math.min(1, 1800 / Math.max(img.naturalWidth, img.naturalHeight));
+      let quality = 0.86;
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      for (let i = 0; i < 14; i += 1) {
+        const w = Math.max(1, Math.round(img.naturalWidth * scale));
+        const h = Math.max(1, Math.round(img.naturalHeight * scale));
+        canvas.width = w;
+        canvas.height = h;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        if (dataUrl.length <= IMAGE_TARGET_CHARS) return { dataUrl, width: w, height: h };
+        if (quality > 0.62) quality -= 0.08;
+        else scale *= 0.85;
+      }
+      throw new Error('too-large');
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  visionFile.addEventListener('change', async () => {
+    const file = visionFile.files && visionFile.files[0];
+    visionFile.value = '';
+    if (!file) return;
+    try {
+      const image = await compressImage(file);
+      if (!S.setVisionImage(image)) throw new Error('invalid');
+      updateVisionThumb();
+      toast('ビジョンボードを設定しました');
+    } catch (e) {
+      toast('この画像は読み込めませんでした。JPEG または PNG の画像を選んでください。', { duration: 6000 });
+    }
+  });
+
+  function removeVisionImage() {
+    if (!window.confirm(`ビジョンボードの画像を削除しますか？${syncNote()}`)) return;
+    S.setVisionImage(null);
+    updateVisionThumb();
+    toast('画像を削除しました');
+  }
+
+  function openLightbox() {
+    const img = S.getState().visionImage;
+    if (!img) return;
+    $('.lightbox-img', lightbox).src = img.dataUrl;
+    lightbox.showModal();
+  }
+
+  lightbox.addEventListener('click', (e) => {
+    if (!e.target.closest('.lightbox-close')) lightbox.close();
+  });
+
+  /* ------------------------------------------------------------------
    * 設定ダイアログ
    * ------------------------------------------------------------------ */
   const settingsDialog = $('#settings-dialog');
@@ -342,14 +709,15 @@
     } else {
       const s = S.getState();
       const kb = (new Blob([JSON.stringify(s)]).size / 1024).toFixed(1);
-      el.textContent = `現在のデータ：ToDo ${s.todos.length}件・Daily ${s.dailies.length}件（約 ${kb} KB）`;
+      el.textContent = `現在のデータ：ToDo ${s.todos.length}件・Daily ${s.dailies.length}件・日記 ${s.journals.length}件（約 ${kb} KB）`;
     }
     el.classList.toggle('is-error', isError);
   }
 
   function openSettings() {
-    const theme = S.getState().settings.theme;
+    const { theme, startView } = S.getState().settings;
     $$('input[name="theme"]', settingsDialog).forEach((r) => { r.checked = r.value === theme; });
+    $$('input[name="startView"]', settingsDialog).forEach((r) => { r.checked = r.value === startView; });
     setStorageMeta();
     settingsDialog.showModal();
   }
@@ -358,6 +726,8 @@
     if (e.target.name === 'theme') {
       S.setTheme(e.target.value);
       applyTheme();
+    } else if (e.target.name === 'startView') {
+      S.setStartView(e.target.value);
     }
   });
 
@@ -375,6 +745,8 @@
     setStorageMeta(`エクスポートしました（${filename}）`);
   }
 
+  const syncNote = () => (K.sync.getStatus().user ? '\n（同期中のため、クラウドと他の端末のデータにも反映されます）' : '');
+
   importInput.addEventListener('change', async () => {
     const file = importInput.files && importInput.files[0];
     importInput.value = '';
@@ -386,16 +758,14 @@
       const result = S.importJson(textContent);
       applyTheme();
       settingsDialog.close();
-      toast(`インポートしました（ToDo ${result.todos}件・Daily ${result.dailies}件）`);
+      toast(`インポートしました（ToDo ${result.todos}件・Daily ${result.dailies}件・日記 ${result.journals}件）`);
     } catch (err) {
       setStorageMeta('読み込めませんでした。Kojin ToDo からエクスポートした JSON ファイルを選択してください。', true);
     }
   });
 
-  const syncNote = () => (K.sync.getStatus().user ? '\n（同期中のため、クラウドと他の端末のデータにも反映されます）' : '');
-
   function resetAll() {
-    if (!window.confirm(`すべてのDaily・ToDoを削除します。この操作は元に戻せません。よろしいですか？${syncNote()}`)) return;
+    if (!window.confirm(`すべての Daily・ToDo・日記・Vision を削除します。この操作は元に戻せません。よろしいですか？${syncNote()}`)) return;
     S.resetAll();
     settingsDialog.close();
     toast('すべてのデータを削除しました');
@@ -505,9 +875,10 @@
   }
 
   function syncLogout() {
-    const ok = window.confirm('ログアウトすると、この端末からタスクが消去されます（クラウドには残り、再度ログインすると表示されます）。ログアウトしますか？');
+    const ok = window.confirm('ログアウトすると、この端末からデータ（タスク・日記・Vision）が消去されます（クラウドには残り、再度ログインすると表示されます）。ログアウトしますか？');
     if (!ok) return;
     syncAction(async () => {
+      flushJournal();
       await K.sync.signOut();
       settingsDialog.close();
       toast('ログアウトしました');
@@ -571,7 +942,21 @@
     const item = input.closest('.item');
     if (item) item.classList.toggle('is-done', input.checked);
     const { checked } = input;
+    if (checked) {
+      vibrate(14);
+      const check = input.closest('.check');
+      if (check && !reducedMotion.matches) {
+        check.classList.remove('is-burst');
+        void check.offsetWidth; // アニメーションを最初から再生する
+        check.classList.add('is-burst');
+      }
+    }
     window.setTimeout(() => commitFn(checked), checked ? CHECK_ANIMATION_MS : 0);
+  }
+
+  function setMode(mode) {
+    if (VIEW_MODE[ui.view] === mode) return;
+    location.hash = `#${ui.lastByMode[mode]}`;
   }
 
   const ACTIONS = {
@@ -581,12 +966,22 @@
     'delete-daily': (el) => deleteDaily(el.dataset.id),
     'quick-detail': (el) => openQuickDetail(el.closest('form')),
     'set-filter': (el) => { ui.todoFilter = el.dataset.filter; render(); },
+    'set-mode': (el) => setMode(el.dataset.mode),
     'clear-completed': () => clearCompleted(),
     'open-settings': () => openSettings(),
     'add-sample': () => addSample(),
     export: () => exportData(),
     import: () => importInput.click(),
     'reset-all': () => resetAll(),
+    'vision-edit': () => openVisionDialog(),
+    'vision-pick-image': () => visionFile.click(),
+    'vision-remove-image': () => removeVisionImage(),
+    'vision-full': () => openLightbox(),
+    'journal-prev': () => setJournalDate(U.addDays(ui.journalDate, -1)),
+    'journal-next': () => setJournalDate(U.addDays(ui.journalDate, 1)),
+    'journal-today': () => setJournalDate(U.dateKey()),
+    'journal-date': (el) => setJournalDate(el.dataset.date),
+    'journal-month': (el) => shiftJournalMonth(Number(el.dataset.step)),
     'sync-google': () => syncAction(() => K.sync.signInWithGoogle()),
     'sync-signup': () => {
       const { email, password } = syncCredentials();
@@ -629,7 +1024,11 @@
       toggleWithAnimation(el, (checked) => S.setTodoCompleted(el.dataset.id, checked));
     } else if (el.dataset.action === 'toggle-daily') {
       const today = U.dateKey();
-      toggleWithAnimation(el, (checked) => S.setDailyDone(el.dataset.id, today, checked));
+      toggleWithAnimation(el, (checked) => {
+        const before = S.dailyProgress(today);
+        S.setDailyDone(el.dataset.id, today, checked);
+        if (checked) celebrateIfDayComplete(before);
+      });
     }
   });
 
@@ -703,7 +1102,7 @@
 
   /* ------------------------------------------------------------------
    * キーボードショートカット（PC）
-   *   N: 新規追加欄へ移動 / 1〜4: 画面切り替え / Esc: 入力欄から抜ける
+   *   N: 新規追加欄へ移動 / 1〜6: 画面切り替え / Esc: 入力欄から抜ける
    * ------------------------------------------------------------------ */
   document.addEventListener('keydown', (e) => {
     if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -716,7 +1115,7 @@
     }
     const typing = target.matches && target.matches('input, textarea, select, [contenteditable="true"]');
     if (typing) {
-      if (e.key === 'Escape' && target.closest('[data-quick]')) target.blur();
+      if (e.key === 'Escape' && (target.closest('[data-quick]') || target.closest('#journal-form'))) target.blur();
       return;
     }
     if (document.querySelector('dialog[open]')) return;
@@ -726,7 +1125,7 @@
         e.preventDefault();
         input.focus();
       }
-    } else if (['1', '2', '3', '4'].includes(e.key)) {
+    } else if (['1', '2', '3', '4', '5', '6'].includes(e.key)) {
       location.hash = `#${VIEWS[Number(e.key) - 1]}`;
     }
   });
@@ -738,8 +1137,13 @@
     const loaded = S.load();
     applyTheme();
     hydrateIcons();
-    [taskDialog, dailyDialog, settingsDialog].forEach(setupDialog);
+    [taskDialog, dailyDialog, settingsDialog, visionDialog, lightbox].forEach(setupDialog);
 
+    // URL に画面の指定がなければ、設定した「最初に開く画面」を表示する
+    const startView = S.getState().settings.startView;
+    if (!location.hash && startView && startView !== 'today') {
+      history.replaceState(null, '', `#${startView}`);
+    }
     ui.view = viewFromHash();
     S.subscribe(render);
     render();
@@ -749,14 +1153,20 @@
     K.sync.init();
 
     window.addEventListener('hashchange', () => {
-      ui.view = viewFromHash();
+      flushJournal();
+      const next = viewFromHash();
+      if (next === 'journal' && ui.view !== 'journal') {
+        ui.journalDate = U.dateKey();
+        ui.journalMonth = ui.journalDate.slice(0, 7);
+      }
+      ui.view = next;
       render();
       window.scrollTo(0, 0);
     });
 
     // 別タブでの変更を反映
     window.addEventListener('storage', (e) => {
-      if (e.key !== S.STORAGE_KEY) return;
+      if (e.key !== S.STORAGE_KEY && e.key !== S.IMAGE_KEY) return;
       S.load();
       applyTheme();
       render();
