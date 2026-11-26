@@ -21,6 +21,7 @@
   let state = createEmptyState();
   let storageAvailable = true;
   const listeners = new Set();
+  const localChangeListeners = new Set(); // 同期機能（sync.js）が、端末内での変更を受け取る
 
   function createEmptyState() {
     return { version: SCHEMA_VERSION, todos: [], dailies: [], settings: { theme: 'auto' } };
@@ -147,6 +148,48 @@
   }
 
   /* ------------------------------------------------------------------
+   * 同期用のフック
+   *   ユーザー操作による変更は emitLocal で「変更内容（ops）」として通知する。
+   *   op の形式:
+   *     { kind: 'todos' | 'dailies', type: 'set', item }       … 追加・更新
+   *     { kind: 'todos' | 'dailies', type: 'delete', id }      … 削除
+   *     { kind: 'dailies', type: 'done', id, key, done, updatedAt } … Daily の完了チェック
+   *     { type: 'replaceAll', todos, dailies }                 … インポート・全削除
+   * ------------------------------------------------------------------ */
+  function onLocalChange(fn) {
+    localChangeListeners.add(fn);
+    return () => localChangeListeners.delete(fn);
+  }
+
+  function emitLocal(ops) {
+    if (!ops.length) return;
+    localChangeListeners.forEach((fn) => fn(ops));
+  }
+
+  const byCreated = (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+
+  /** クラウドから受け取ったデータで ToDo・Daily を置き換える（変更がなければ何もしない） */
+  function replaceCollections({ todos, dailies }) {
+    const nextTodos = normalizeList(todos, normalizeTodo).sort(byCreated);
+    const nextDailies = normalizeList(dailies, normalizeDaily).sort(byCreated);
+    const same = JSON.stringify(nextTodos) === JSON.stringify(state.todos.slice().sort(byCreated))
+      && JSON.stringify(nextDailies) === JSON.stringify(state.dailies.slice().sort(byCreated));
+    if (same) return false;
+    state.todos = nextTodos;
+    state.dailies = nextDailies;
+    commit();
+    return true;
+  }
+
+  /** ログアウト時：この端末のタスクを消去する（テーマ設定は残す） */
+  function clearLocalData() {
+    const theme = state.settings.theme;
+    state = createEmptyState();
+    state.settings.theme = theme;
+    commit();
+  }
+
+  /* ------------------------------------------------------------------
    * ToDo
    * ------------------------------------------------------------------ */
   const findTodo = (id) => state.todos.find((t) => t.id === id) || null;
@@ -157,6 +200,7 @@
     if (!todo) return null;
     state.todos.push(todo);
     commit();
+    emitLocal([{ kind: 'todos', type: 'set', item: { ...todo } }]);
     return todo;
   }
 
@@ -167,6 +211,7 @@
     if (!next) return null;
     Object.assign(t, next);
     commit();
+    emitLocal([{ kind: 'todos', type: 'set', item: { ...t } }]);
     return t;
   }
 
@@ -178,6 +223,7 @@
     t.completedAt = completed ? now : null;
     t.updatedAt = now;
     commit();
+    emitLocal([{ kind: 'todos', type: 'set', item: { ...t } }]);
   }
 
   function deleteTodo(id) {
@@ -185,6 +231,7 @@
     if (index < 0) return null;
     const [item] = state.todos.splice(index, 1);
     commit();
+    emitLocal([{ kind: 'todos', type: 'delete', id }]);
     return { item, index };
   }
 
@@ -192,6 +239,7 @@
     if (findTodo(entry.item.id)) return;
     state.todos.splice(Math.min(entry.index, state.todos.length), 0, entry.item);
     commit();
+    emitLocal([{ kind: 'todos', type: 'set', item: { ...entry.item } }]);
   }
 
   function clearCompletedTodos() {
@@ -199,13 +247,16 @@
     if (!removed.length) return [];
     state.todos = state.todos.filter((t) => !t.completed);
     commit();
+    emitLocal(removed.map((t) => ({ kind: 'todos', type: 'delete', id: t.id })));
     return removed;
   }
 
   function restoreTodos(items) {
     const ids = new Set(state.todos.map((t) => t.id));
-    state.todos.push(...items.filter((t) => !ids.has(t.id)));
+    const added = items.filter((t) => !ids.has(t.id));
+    state.todos.push(...added);
     commit();
+    emitLocal(added.map((t) => ({ kind: 'todos', type: 'set', item: { ...t } })));
   }
 
   /* ------------------------------------------------------------------
@@ -220,6 +271,7 @@
     if (!daily) return null;
     state.dailies.push(daily);
     commit();
+    emitLocal([{ kind: 'dailies', type: 'set', item: { ...daily } }]);
     return daily;
   }
 
@@ -232,6 +284,7 @@
     if (!next) return null;
     Object.assign(d, next);
     commit();
+    emitLocal([{ kind: 'dailies', type: 'set', item: { ...d } }]);
     return d;
   }
 
@@ -245,6 +298,7 @@
     d.doneDates = d.doneDates.filter((k) => k >= cutoff).sort();
     d.updatedAt = new Date().toISOString();
     commit();
+    emitLocal([{ kind: 'dailies', type: 'done', id, key, done: !!done, updatedAt: d.updatedAt }]);
   }
 
   function deleteDaily(id) {
@@ -252,6 +306,7 @@
     if (index < 0) return null;
     const [item] = state.dailies.splice(index, 1);
     commit();
+    emitLocal([{ kind: 'dailies', type: 'delete', id }]);
     return { item, index };
   }
 
@@ -259,6 +314,7 @@
     if (findDaily(entry.item.id)) return;
     state.dailies.splice(Math.min(entry.index, state.dailies.length), 0, entry.item);
     commit();
+    emitLocal([{ kind: 'dailies', type: 'set', item: { ...entry.item } }]);
   }
 
   /** その日が実施対象日か（開始日以降かつ指定曜日） */
@@ -318,6 +374,7 @@
     const next = normalizeState(JSON.parse(jsonText));
     state = next;
     commit();
+    emitLocal([{ type: 'replaceAll', todos: state.todos.map((t) => ({ ...t })), dailies: state.dailies.map((d) => ({ ...d })) }]);
     return { todos: next.todos.length, dailies: next.dailies.length };
   }
 
@@ -326,12 +383,15 @@
     state = createEmptyState();
     state.settings.theme = theme;
     commit();
+    emitLocal([{ type: 'replaceAll', todos: [], dailies: [] }]);
   }
 
   function addSampleData() {
     const today = dateKey();
     const now = new Date().toISOString();
     const yesterday = addDays(today, -1);
+    const firstTodo = state.todos.length;
+    const firstDaily = state.dailies.length;
     const dailies = [
       { title: '応募者・エントリー状況を確認する', days: [1, 2, 3, 4, 5], done: [yesterday] },
       { title: 'メール・Slackの未読を返信する', days: ALL_DAYS, done: [addDays(today, -2), yesterday] },
@@ -354,6 +414,10 @@
       state.todos.push(normalizeTodo({ ...t, completed: false, createdAt: now, updatedAt: now }));
     });
     commit();
+    emitLocal([
+      ...state.dailies.slice(firstDaily).map((d) => ({ kind: 'dailies', type: 'set', item: { ...d } })),
+      ...state.todos.slice(firstTodo).map((t) => ({ kind: 'todos', type: 'set', item: { ...t } })),
+    ]);
   }
 
   K.store = {
@@ -363,6 +427,9 @@
     LIMITS,
     load,
     subscribe,
+    onLocalChange,
+    replaceCollections,
+    clearLocalData,
     getState: () => state,
     isStorageAvailable: () => storageAvailable,
     getTodo: findTodo,

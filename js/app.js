@@ -382,7 +382,7 @@
     try {
       const textContent = await file.text();
       JSON.parse(textContent); // 形式チェック（確認ダイアログの前に）
-      if (!window.confirm('現在のデータは、読み込むファイルの内容で置き換えられます。よろしいですか？')) return;
+      if (!window.confirm(`現在のデータは、読み込むファイルの内容で置き換えられます。よろしいですか？${syncNote()}`)) return;
       const result = S.importJson(textContent);
       applyTheme();
       settingsDialog.close();
@@ -392,8 +392,10 @@
     }
   });
 
+  const syncNote = () => (K.sync.getStatus().user ? '\n（同期中のため、クラウドと他の端末のデータにも反映されます）' : '');
+
   function resetAll() {
-    if (!window.confirm('すべてのDaily・ToDoを削除します。この操作は元に戻せません。よろしいですか？')) return;
+    if (!window.confirm(`すべてのDaily・ToDoを削除します。この操作は元に戻せません。よろしいですか？${syncNote()}`)) return;
     S.resetAll();
     settingsDialog.close();
     toast('すべてのデータを削除しました');
@@ -405,6 +407,119 @@
     if (ui.view !== 'today') location.hash = '#today';
     toast('サンプルデータを追加しました');
   }
+
+  /* ------------------------------------------------------------------
+   * 同期（ログイン）
+   * ------------------------------------------------------------------ */
+  const SYNC_LABELS = {
+    loading: '同期を準備中', signedOut: '同期オフ', syncing: '同期中', synced: '同期済み', offline: 'オフライン', error: '同期エラー',
+  };
+  const SYNC_DETAILS = {
+    syncing: '同期しています…', synced: '最新の状態です', offline: 'オフラインです（接続が戻ると自動で同期します）', error: '同期エラー',
+  };
+  let syncPanelKey = '';
+  let lastSyncState = null;
+
+  function showSyncMessage(message, isError = true) {
+    const el = $('#sync-message');
+    el.textContent = message || '';
+    el.hidden = !message;
+    el.classList.toggle('is-error', Boolean(message) && isError);
+  }
+
+  function syncPanelHtml(st) {
+    if (st.user) {
+      return `<div class="sync-account" data-sync-state="${st.state}">
+          <span class="sync-dot"></span>
+          <div class="sync-account-text">
+            <p class="sync-user">${U.escapeHtml(st.user.email || st.user.name || 'ログイン中')}</p>
+            <p class="help">${st.user.provider}でログイン中・<span data-sync-detail></span></p>
+          </div>
+        </div>
+        <div class="btn-row"><button type="button" class="btn btn-secondary btn-sm" data-action="sync-logout">ログアウト</button></div>`;
+    }
+    if (st.state === 'disabled') {
+      return '<p class="help">同期機能は未設定です。設定すると、PC とスマホで同じデータを使えます（設定方法は README の「同期機能の設定」をご覧ください）。</p>';
+    }
+    if (st.state === 'unsupported') {
+      return '<p class="help">同期機能は、公開したページ（https:// で始まるURL）で開いたときに使えます。ファイルを直接開いている間は、この端末だけに保存されます。</p>';
+    }
+    if (st.state === 'loading') return '<p class="help">同期機能を準備しています…</p>';
+    if (st.state === 'error') return '<p class="help">現在、同期機能を利用できません。</p>';
+    return `<p class="help">ログインすると、PC とスマホで同じデータを使えます。<strong>すべての端末で同じログイン方法</strong>を使ってください。</p>
+      <div class="btn-row"><button type="button" class="btn btn-secondary" data-action="sync-google">${V.icon('login')}Google でログイン</button></div>
+      <details class="sync-email">
+        <summary>メールアドレスでログイン</summary>
+        <form id="sync-email-form" class="sync-email-form" novalidate>
+          <input class="input" id="sync-email" name="email" type="email" autocomplete="username" placeholder="メールアドレス" aria-label="メールアドレス">
+          <input class="input" id="sync-password" name="password" type="password" autocomplete="current-password" placeholder="パスワード（6文字以上）" aria-label="パスワード">
+          <div class="btn-row">
+            <button type="submit" class="btn btn-primary btn-sm">ログイン</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-action="sync-signup">新規登録</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-action="sync-reset">パスワードを忘れた場合</button>
+          </div>
+        </form>
+        <p class="help">iPhone の「ホーム画面に追加」から起動したときに Google ログインがうまくいかない場合は、こちらをご利用ください。</p>
+      </details>`;
+  }
+
+  function updateSyncUi(st) {
+    const visible = st.state !== 'disabled' && st.state !== 'unsupported';
+    $$('[data-sync-pill]').forEach((el) => {
+      el.hidden = !visible;
+      el.dataset.syncState = st.state;
+      el.title = st.error || `${SYNC_LABELS[st.state] || ''}（クリックで設定）`;
+    });
+    $$('[data-sync-label]').forEach((el) => { el.textContent = SYNC_LABELS[st.state] || ''; });
+
+    const key = st.user ? `user:${st.user.email}:${st.user.provider}` : st.state;
+    if (key !== syncPanelKey) {
+      $('#sync-panel').innerHTML = syncPanelHtml(st);
+      syncPanelKey = key;
+    }
+    const account = $('.sync-account', settingsDialog);
+    if (account) account.dataset.syncState = st.state;
+    const detail = $('[data-sync-detail]', settingsDialog);
+    if (detail) detail.textContent = SYNC_DETAILS[st.state] || '';
+
+    if (st.error) showSyncMessage(st.error);
+    else if (lastSyncState === 'error') showSyncMessage('');
+    if (lastSyncState === 'signedOut' && st.user) toast('ログインしました。データを同期しています');
+    lastSyncState = st.state;
+  }
+
+  async function syncAction(fn, successMessage = '') {
+    showSyncMessage('');
+    try {
+      await fn();
+      if (successMessage) showSyncMessage(successMessage, false);
+    } catch (e) {
+      if (e.message) showSyncMessage(e.message);
+    }
+  }
+
+  function syncCredentials() {
+    const email = $('#sync-email', settingsDialog);
+    const password = $('#sync-password', settingsDialog);
+    return { email: email ? email.value.trim() : '', password: password ? password.value : '' };
+  }
+
+  function syncLogout() {
+    const ok = window.confirm('ログアウトすると、この端末からタスクが消去されます（クラウドには残り、再度ログインすると表示されます）。ログアウトしますか？');
+    if (!ok) return;
+    syncAction(async () => {
+      await K.sync.signOut();
+      settingsDialog.close();
+      toast('ログアウトしました');
+    });
+  }
+
+  settingsDialog.addEventListener('submit', (e) => {
+    if (e.target.id !== 'sync-email-form') return;
+    e.preventDefault();
+    const { email, password } = syncCredentials();
+    syncAction(() => K.sync.signInWithEmail(email, password));
+  });
 
   /* ------------------------------------------------------------------
    * 操作
@@ -472,6 +587,20 @@
     export: () => exportData(),
     import: () => importInput.click(),
     'reset-all': () => resetAll(),
+    'sync-google': () => syncAction(() => K.sync.signInWithGoogle()),
+    'sync-signup': () => {
+      const { email, password } = syncCredentials();
+      syncAction(() => K.sync.signUpWithEmail(email, password));
+    },
+    'sync-reset': () => {
+      const { email } = syncCredentials();
+      if (!email) {
+        showSyncMessage('メールアドレスを入力してから押してください。');
+        return;
+      }
+      syncAction(() => K.sync.resetPassword(email), `${email} にパスワード再設定用のメールを送信しました。`);
+    },
+    'sync-logout': () => syncLogout(),
     'dialog-delete-todo': () => {
       const id = taskEditingId;
       taskDialog.close();
@@ -614,6 +743,10 @@
     ui.view = viewFromHash();
     S.subscribe(render);
     render();
+
+    // PC・スマホ間の同期（firebase-config.js が設定されている場合のみ動作）
+    K.sync.onStatus(updateSyncUi);
+    K.sync.init();
 
     window.addEventListener('hashchange', () => {
       ui.view = viewFromHash();
