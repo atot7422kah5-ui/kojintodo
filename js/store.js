@@ -19,7 +19,8 @@
   const SCHEMA_VERSION = 1;
   const QUADRANTS = ['q1', 'q2', 'q3', 'q4'];
   const THEMES = ['auto', 'light', 'dark', 'discipline'];
-  const START_VIEWS = ['today', 'vision', 'goals', 'journal'];
+  const START_VIEWS = ['today', 'vision', 'goals', 'journal', 'memo'];
+  const MEMO_SOURCES = ['text', 'voice'];
   const GOAL_PERIODS = ['week', 'month', 'year'];
   const GOAL_MEASURES = ['daily', 'count', 'check'];
   const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
@@ -37,6 +38,7 @@
     goalTitle: 120,
     goalTheme: 20,
     goalUnit: 12,
+    memo: 5000,
   };
 
   let state = createEmptyState();
@@ -52,6 +54,7 @@
       dailies: [],
       journals: [],
       goals: [],
+      memos: [],
       vision: null,
       visionImage: null,
       settings: { theme: 'auto', startView: 'today' },
@@ -272,14 +275,31 @@
     };
   }
 
+  /** 日中のメモ（1件ずつ。date はメモを書いた日） */
+  function normalizeMemo(m) {
+    if (!m || typeof m !== 'object') return null;
+    const body = text(m.text, LIMITS.memo).replace(/\r\n?/g, '\n');
+    if (!body.trim() || !isDateKey(m.date)) return null;
+    const now = new Date().toISOString();
+    return {
+      id: typeof m.id === 'string' && m.id ? m.id : uid(),
+      date: m.date,
+      text: body,
+      source: MEMO_SOURCES.includes(m.source) ? m.source : 'text',
+      createdAt: isoOr(m.createdAt, now),
+      updatedAt: isoOr(m.updatedAt, now),
+    };
+  }
+
   function normalizeState(data) {
-    const hasData = data && typeof data === 'object' && ['todos', 'dailies', 'journals', 'goals'].some((k) => Array.isArray(data[k]));
+    const hasData = data && typeof data === 'object' && ['todos', 'dailies', 'journals', 'goals', 'memos'].some((k) => Array.isArray(data[k]));
     if (!hasData) throw new Error('Kojin ToDo のデータ形式ではありません');
     const s = createEmptyState();
     s.todos = normalizeList(data.todos, normalizeTodo);
     s.dailies = normalizeList(data.dailies, normalizeDaily);
     s.journals = normalizeJournals(data.journals);
     s.goals = normalizeList(data.goals, normalizeGoal);
+    s.memos = normalizeList(data.memos, normalizeMemo).sort(byCreated);
     s.vision = normalizeVision(data.vision);
     s.visionImage = normalizeVisionImage(data.visionImage);
     const settings = data.settings || {};
@@ -385,6 +405,7 @@
       dailies: state.dailies.map((d) => ({ ...d, days: d.days.slice(), doneDates: d.doneDates.slice() })),
       journals: state.journals.map((j) => ({ ...j, good: j.good.slice() })),
       goals: state.goals.map((g) => ({ ...g, dailyIds: g.dailyIds.slice() })),
+      memos: state.memos.map((m) => ({ ...m })),
       vision: [state.vision, state.visionImage].filter(Boolean).map((v) => ({ ...v })),
     };
   }
@@ -392,7 +413,7 @@
   const byCreated = (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
 
   /** クラウドから受け取ったデータで置き換える（変更がなければ何もしない） */
-  function replaceCollections({ todos, dailies, journals, goals, vision }) {
+  function replaceCollections({ todos, dailies, journals, goals, memos, vision }) {
     let changed = false;
     if (todos) {
       const next = normalizeList(todos, normalizeTodo).sort(byCreated);
@@ -409,6 +430,10 @@
     if (goals) {
       const next = normalizeList(goals, normalizeGoal).sort(byCreated);
       if (!sameJson(next, state.goals.slice().sort(byCreated))) { state.goals = next; changed = true; }
+    }
+    if (memos) {
+      const next = normalizeList(memos, normalizeMemo).sort(byCreated);
+      if (!sameJson(next, state.memos)) { state.memos = next; changed = true; }
     }
     if (vision) {
       const main = normalizeVision(vision.find((v) => v && v.id === 'main'));
@@ -752,6 +777,54 @@
   }
 
   /* ------------------------------------------------------------------
+   * メモ
+   * ------------------------------------------------------------------ */
+  const findMemo = (id) => state.memos.find((m) => m.id === id) || null;
+
+  function memosFor(date) {
+    return state.memos.filter((m) => m.date === date);
+  }
+
+  function addMemo(input) {
+    const now = new Date().toISOString();
+    const memo = normalizeMemo({ ...input, id: uid(), date: input.date || dateKey(), createdAt: now, updatedAt: now });
+    if (!memo) return null;
+    state.memos.push(memo);
+    state.memos.sort(byCreated);
+    commit();
+    emitLocal([{ kind: 'memos', type: 'set', item: { ...memo } }]);
+    return memo;
+  }
+
+  function updateMemo(id, patch) {
+    const m = findMemo(id);
+    if (!m) return null;
+    const next = normalizeMemo({ ...m, text: patch.text, id: m.id, date: m.date, createdAt: m.createdAt, updatedAt: new Date().toISOString() });
+    if (!next) return null;
+    Object.assign(m, next);
+    commit();
+    emitLocal([{ kind: 'memos', type: 'set', item: { ...m } }]);
+    return m;
+  }
+
+  function deleteMemo(id) {
+    const index = state.memos.findIndex((m) => m.id === id);
+    if (index < 0) return null;
+    const [item] = state.memos.splice(index, 1);
+    commit();
+    emitLocal([{ kind: 'memos', type: 'delete', id }]);
+    return { item, index };
+  }
+
+  function restoreMemo(entry) {
+    if (findMemo(entry.item.id)) return;
+    state.memos.push(entry.item);
+    state.memos.sort(byCreated);
+    commit();
+    emitLocal([{ kind: 'memos', type: 'set', item: { ...entry.item } }]);
+  }
+
+  /* ------------------------------------------------------------------
    * Vision
    * ------------------------------------------------------------------ */
   function saveVision(fields) {
@@ -801,7 +874,9 @@
     state = next;
     commit();
     emitLocal([{ type: 'replaceAll', ...snapshotForSync() }]);
-    return { todos: next.todos.length, dailies: next.dailies.length, journals: next.journals.length, goals: next.goals.length };
+    return {
+      todos: next.todos.length, dailies: next.dailies.length, journals: next.journals.length, goals: next.goals.length, memos: next.memos.length,
+    };
   }
 
   function resetAll() {
@@ -865,6 +940,7 @@
     getDaily: findDaily,
     getJournal: findJournal,
     getGoal: findGoal,
+    getMemo: findMemo,
     addTodo,
     updateTodo,
     setTodoCompleted,
@@ -897,6 +973,11 @@
     changeGoalCount,
     deleteGoal,
     restoreGoal,
+    memosFor,
+    addMemo,
+    updateMemo,
+    deleteMemo,
+    restoreMemo,
     saveVision,
     setVisionImage,
     setTheme,

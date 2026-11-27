@@ -8,7 +8,8 @@
  * - Firebase の読み込み前など、まだ送れない変更は「送信待ち（outbox）」として localStorage に保管する
  *
  * クラウド上の保存場所: users/{uid}/todos/{id}, users/{uid}/dailies/{id},
- *                       users/{uid}/journals/{日付}, users/{uid}/goals/{id}, users/{uid}/vision/main・image
+ *                       users/{uid}/journals/{日付}, users/{uid}/goals/{id}, users/{uid}/memos/{id},
+ *                       users/{uid}/vision/main・image
  * （セキュリティルールで、本人の uid 以下だけを読み書きできるようにする）
  */
 (function (K) {
@@ -17,7 +18,7 @@
   const S = K.store;
   const SDK_BASE = 'https://www.gstatic.com/firebasejs/10.14.1';
   const SDK_FILES = ['firebase-app-compat.js', 'firebase-auth-compat.js', 'firebase-firestore-compat.js'];
-  const KINDS = ['todos', 'dailies', 'journals', 'goals', 'vision'];
+  const KINDS = ['todos', 'dailies', 'journals', 'goals', 'memos', 'vision'];
   const BATCH_LIMIT = 400; // Firestore の一括書き込みは 500 件まで
   const UID_KEY = `${S.STORAGE_KEY}:sync-uid`;
   const OUTBOX_KEY = `${S.STORAGE_KEY}:sync-outbox`;

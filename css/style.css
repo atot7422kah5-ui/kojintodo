@@ -2452,6 +2452,96 @@ dialog.lightbox::backdrop { background: #000; }
 .input-unit { width: 80px; }
 
 /* ==========================================================================
+   メモ（書く・話す・撮る）
+   ========================================================================== */
+.memo-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.memo-input { min-height: 96px; }
+
+.memo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.memo-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-2);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.memo-tool:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.memo-tool:disabled { opacity: 0.5; cursor: default; }
+
+.memo-tool.is-recording {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.memo-tool.is-recording .icon { animation: sync-pulse 1s ease-in-out infinite; }
+.memo-status { min-height: 1.4em; font-size: 12px; color: var(--text-3); }
+.memo-status.is-error { color: var(--danger); font-weight: 600; }
+
+.memo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.memo-item {
+  padding: 10px 12px 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.memo-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.memo-meta .icon-btn { width: 30px; height: 30px; margin-right: -4px; }
+.memo-time { font-weight: 800; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.memo-source { display: inline-flex; align-items: center; gap: 4px; }
+.memo-source .icon { width: 13px; height: 13px; }
+
+.memo-text {
+  margin-top: 2px;
+  font-size: 15px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.memo-kagami { margin-top: 10px; }
+
+/* ==========================================================================
    お祝い（Daily をすべて完了したとき）
    ========================================================================== */
 .celebrate {

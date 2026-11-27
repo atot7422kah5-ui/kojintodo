@@ -13,7 +13,7 @@
   <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
   <!-- 更新時は ?v= の値をすべて変更する（ブラウザに残った古い CSS・JS と混ざらないようにするため） -->
-  <link rel="stylesheet" href="css/style.css?v=20261127-3">
+  <link rel="stylesheet" href="css/style.css?v=20261127-4">
   <script>
     // 画面のちらつきを防ぐため、描画前に保存済みテーマを適用する
     (function () {
@@ -50,6 +50,7 @@
         <a class="nav-link" href="#vision" data-nav="vision"><span data-icon="mountain"></span><span>Vision</span></a>
         <a class="nav-link" href="#goals" data-nav="goals"><span data-icon="target"></span><span>目標</span><span class="nav-count" data-count="goals"></span></a>
         <a class="nav-link" href="#journal" data-nav="journal"><span data-icon="book"></span><span>日記</span><span class="nav-count" data-count="journal"></span></a>
+        <a class="nav-link" href="#memo" data-nav="memo"><span data-icon="memo"></span><span>メモ</span><span class="nav-count" data-count="memo"></span></a>
       </nav>
       <div class="sidebar-foot">
         <button type="button" class="sync-pill" data-action="open-settings" data-sync-pill hidden><span class="sync-dot"></span><span data-sync-label></span></button>
@@ -85,6 +86,7 @@
       <a class="tab" href="#vision" data-nav="vision" data-mode="life"><span data-icon="mountain"></span><span>Vision</span></a>
       <a class="tab" href="#goals" data-nav="goals" data-mode="life"><span data-icon="target"></span><span>目標</span></a>
       <a class="tab" href="#journal" data-nav="journal" data-mode="life"><span data-icon="book"></span><span>日記</span></a>
+      <a class="tab" href="#memo" data-nav="memo" data-mode="life"><span data-icon="memo"></span><span>メモ</span></a>
     </nav>
   </div>
 
@@ -206,6 +208,7 @@
             <label class="seg"><input type="radio" name="startView" value="vision"><span>Vision</span></label>
             <label class="seg"><input type="radio" name="startView" value="goals"><span>目標</span></label>
             <label class="seg"><input type="radio" name="startView" value="journal"><span>日記</span></label>
+            <label class="seg"><input type="radio" name="startView" value="memo"><span>メモ</span></label>
           </div>
           <p class="help">「Vision」にすると、毎朝アプリを開いたときに最初にビジョンボードが表示されます（この端末だけの設定です）。</p>
         </fieldset>
@@ -263,7 +266,7 @@
 
         <div class="field danger-zone">
           <span class="field-label">データの削除</span>
-          <p class="help">すべての Daily・ToDo・目標・日記・Vision を削除します。元に戻せないため、必要に応じて先にエクスポートしてください。</p>
+          <p class="help">すべての Daily・ToDo・目標・日記・メモ・Vision を削除します。元に戻せないため、必要に応じて先にエクスポートしてください。</p>
           <div class="btn-row">
             <button type="button" class="btn btn-danger-outline" data-action="reset-all">すべてのデータを削除</button>
           </div>
@@ -275,6 +278,30 @@
         <button type="button" class="btn btn-primary" data-close>閉じる</button>
       </footer>
     </div>
+  </dialog>
+
+  <!-- メモの編集ダイアログ -->
+  <dialog id="memo-dialog" class="sheet" aria-labelledby="memo-dialog-title">
+    <form id="memo-form" class="sheet-form" novalidate>
+      <header class="sheet-head">
+        <h2 id="memo-dialog-title" class="sheet-title">メモを編集</h2>
+        <button type="button" class="icon-btn" data-close aria-label="閉じる"><span data-icon="x"></span></button>
+      </header>
+      <div class="sheet-body">
+        <p class="sheet-meta" data-memo-meta></p>
+        <label class="field">
+          <span class="field-label">メモ</span>
+          <textarea class="textarea" name="text" rows="7" maxlength="5000"></textarea>
+          <span class="field-error" data-error="text" hidden>メモを入力してください</span>
+        </label>
+      </div>
+      <footer class="sheet-foot">
+        <button type="button" class="btn btn-danger" data-action="dialog-delete-memo">削除</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn btn-ghost" data-close>キャンセル</button>
+        <button type="submit" class="btn btn-primary">保存</button>
+      </footer>
+    </form>
   </dialog>
 
   <!-- 目標の追加・編集ダイアログ -->
@@ -414,12 +441,12 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script src="js/utils.js?v=20261127-3"></script>
-  <script src="js/store.js?v=20261127-3"></script>
-  <script src="js/views.js?v=20261127-3"></script>
-  <script src="js/firebase-config.js?v=20261127-3"></script>
-  <script src="js/sync.js?v=20261127-3"></script>
-  <script src="js/app.js?v=20261127-3"></script>
-  <script src="js/kagami.js?v=20261127-3"></script>
+  <script src="js/utils.js?v=20261127-4"></script>
+  <script src="js/store.js?v=20261127-4"></script>
+  <script src="js/views.js?v=20261127-4"></script>
+  <script src="js/firebase-config.js?v=20261127-4"></script>
+  <script src="js/sync.js?v=20261127-4"></script>
+  <script src="js/app.js?v=20261127-4"></script>
+  <script src="js/kagami.js?v=20261127-4"></script>
 </body>
 </html>
