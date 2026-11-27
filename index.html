@@ -13,7 +13,7 @@
   <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
   <!-- 更新時は ?v= の値をすべて変更する（ブラウザに残った古い CSS・JS と混ざらないようにするため） -->
-  <link rel="stylesheet" href="css/style.css?v=20261127-2">
+  <link rel="stylesheet" href="css/style.css?v=20261127-3">
   <script>
     // 画面のちらつきを防ぐため、描画前に保存済みテーマを適用する
     (function () {
@@ -221,6 +221,28 @@
           <p class="help">「Discipline」は黒を基調に夕焼けのオレンジを差した、ビジョンボードの世界観に合わせたテーマです。</p>
         </fieldset>
 
+        <section class="field" aria-labelledby="kagami-label">
+          <span class="field-label" id="kagami-label">カガミ連携（日記を GitHub に送る）</span>
+          <p class="help">日記を書くと、指定した GitHub リポジトリに1日1ファイルで送ります。トークンはこの端末だけに保存され、同期やエクスポートには含まれません。PC とスマホで使う場合は、それぞれの端末で保存してください。</p>
+          <form id="kagami-form" class="kagami-form" autocomplete="off" novalidate>
+            <label class="kagami-row"><span class="help">トークン（Fine-grained personal access token）</span>
+              <input class="input" type="password" name="token" autocomplete="off" spellcheck="false"></label>
+            <label class="kagami-row"><span class="help">リポジトリ（owner/name）</span>
+              <input class="input" name="repo" spellcheck="false"></label>
+            <label class="kagami-row"><span class="help">ブランチ</span>
+              <input class="input" name="branch" spellcheck="false"></label>
+            <label class="kagami-row"><span class="help">保存先フォルダ</span>
+              <input class="input" name="path" spellcheck="false"></label>
+            <label class="kagami-check"><input type="checkbox" name="enabled"> <span>日記をカガミに送る</span></label>
+            <div class="btn-row">
+              <button type="submit" class="btn btn-secondary">保存して接続を確かめる</button>
+              <button type="button" class="btn btn-secondary" data-kagami="send-now">すべての日記をいま送る</button>
+              <button type="button" class="btn btn-danger-outline" data-kagami="forget">トークンを削除</button>
+            </div>
+            <p class="help" data-kagami-status role="status"></p>
+          </form>
+        </section>
+
         <div class="field">
           <span class="field-label">データのバックアップ</span>
           <p class="help">データはこのブラウザ内（localStorage）に保存されます（同期中はクラウドにも保存）。定期的なバックアップや、同期を使わずに別の端末へ移すときはエクスポートをご利用ください。</p>
@@ -392,11 +414,12 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script src="js/utils.js?v=20261127-2"></script>
-  <script src="js/store.js?v=20261127-2"></script>
-  <script src="js/views.js?v=20261127-2"></script>
-  <script src="js/firebase-config.js?v=20261127-2"></script>
-  <script src="js/sync.js?v=20261127-2"></script>
-  <script src="js/app.js?v=20261127-2"></script>
+  <script src="js/utils.js?v=20261127-3"></script>
+  <script src="js/store.js?v=20261127-3"></script>
+  <script src="js/views.js?v=20261127-3"></script>
+  <script src="js/firebase-config.js?v=20261127-3"></script>
+  <script src="js/sync.js?v=20261127-3"></script>
+  <script src="js/app.js?v=20261127-3"></script>
+  <script src="js/kagami.js?v=20261127-3"></script>
 </body>
 </html>

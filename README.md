@@ -145,6 +145,29 @@ PC とスマホで同じデータを使うための設定です。Google の Fir
 
 ---
 
+## カガミ連携（日記を GitHub に送る）
+
+日記を、自己理解パートナー「カガミ」のリポジトリ（例：`atot7422kah5-ui/jibunrikai`）に1日1ファイルの Markdown として送ります。カガミは毎朝それを読み、前日の様子を次の対話に引き継ぎます。
+
+### 1. GitHub のトークンを作る（5分）
+1. GitHub の **Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token**
+2. **Token name**：`kojintodo-kagami` など
+3. **Expiration**：お好みで（期限が来たら作り直して保存し直す）
+4. **Repository access**：**Only select repositories** → カガミのリポジトリ（`jibunrikai`）**だけ**を選ぶ
+5. **Permissions → Repository permissions → Contents**：**Read and write**（ほかは触らない）
+6. **Generate token** を押し、表示された `github_pat_...` をコピー
+
+### 2. アプリに保存する
+「設定・データ → カガミ連携」にトークンを貼り、リポジトリ・ブランチ・保存先フォルダを確かめて「保存して接続を確かめる」。
+PC とスマホの両方で書く場合は、それぞれの端末で保存してください（トークンは端末ごとに保存され、クラウド同期されません）。
+
+### 3. 仕組み
+- 日記を保存して15秒入力が止まったとき、またはアプリを閉じたとき・開いたときに、変更のあった日だけ `journal/diary/YYYY-MM-DD.md` に書き込みます（コミットメッセージ `diary: YYYY-MM-DD`）。
+- 同期で別の端末から届いた日記も、トークンを保存した端末で開いたときに送られます。
+- 日記を消しても、GitHub 側のファイルは消しません。
+- 通信先は `api.github.com` だけ。トークンは `localStorage` の `kojin-kagami-config` に保存し、Firestore・エクスポートには含めません。不要になったら「トークンを削除」と、GitHub 側でのトークンの取り消しを行ってください。
+- 送り先のリポジトリは **private** にしてください（日記の内容がそのまま入ります）。
+
 ## 使い方
 
 ### タスクを追加する

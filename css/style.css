@@ -2674,3 +2674,8 @@ dialog.lightbox::backdrop { background: #000; }
     transition-duration: 0.01ms !important;
   }
 }
+
+/* カガミ連携 */
+.kagami-form { display: grid; gap: 8px; margin-top: 8px; }
+.kagami-row { display: grid; gap: 4px; }
+.kagami-check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
