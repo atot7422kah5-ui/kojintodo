@@ -18,8 +18,10 @@
   const IMAGE_KEY = `${STORAGE_KEY}:vision-image`;
   const SCHEMA_VERSION = 1;
   const QUADRANTS = ['q1', 'q2', 'q3', 'q4'];
-  const THEMES = ['auto', 'light', 'dark'];
-  const START_VIEWS = ['today', 'vision', 'journal'];
+  const THEMES = ['auto', 'light', 'dark', 'discipline'];
+  const START_VIEWS = ['today', 'vision', 'goals', 'journal'];
+  const GOAL_PERIODS = ['week', 'month', 'year'];
+  const GOAL_MEASURES = ['daily', 'count', 'check'];
   const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
   const HISTORY_KEEP_DAYS = 400; // Daily の完了履歴を保持する日数
   const IMAGE_MAX_CHARS = 900000; // Firestore の 1 ドキュメント上限（1MB）に収まる大きさ
@@ -32,6 +34,9 @@
     keyword: 80,
     visionTitle: 80,
     statement: 2000,
+    goalTitle: 120,
+    goalTheme: 20,
+    goalUnit: 12,
   };
 
   let state = createEmptyState();
@@ -46,6 +51,7 @@
       todos: [],
       dailies: [],
       journals: [],
+      goals: [],
       vision: null,
       visionImage: null,
       settings: { theme: 'auto', startView: 'today' },
@@ -186,13 +192,94 @@
     };
   }
 
+  /* ------------------------------------------------------------------
+   * 目標の期間（週は月曜日の日付、月は YYYY-MM、年は YYYY で表す）
+   * ------------------------------------------------------------------ */
+  const pad2 = (n) => String(n).padStart(2, '0');
+
+  function mondayOf(key) {
+    return addDays(key, -((weekday(key) + 6) % 7));
+  }
+
+  function periodKeyOf(period, date) {
+    if (period === 'week') return mondayOf(date);
+    if (period === 'month') return date.slice(0, 7);
+    return date.slice(0, 4);
+  }
+
+  function isPeriodKey(period, key) {
+    if (typeof key !== 'string') return false;
+    if (period === 'week') return isDateKey(key) && weekday(key) === 1;
+    if (period === 'month') return /^\d{4}-(0[1-9]|1[0-2])$/.test(key);
+    return /^\d{4}$/.test(key);
+  }
+
+  /** 期間の最初と最後の日付 */
+  function periodRange(period, key) {
+    if (period === 'week') return [key, addDays(key, 6)];
+    if (period === 'month') {
+      const [y, m] = key.split('-').map(Number);
+      return [`${key}-01`, `${key}-${pad2(new Date(y, m, 0).getDate())}`];
+    }
+    return [`${key}-01-01`, `${key}-12-31`];
+  }
+
+  function shiftPeriod(period, key, step) {
+    if (period === 'week') return addDays(key, 7 * step);
+    if (period === 'month') {
+      const [y, m] = key.split('-').map(Number);
+      const d = new Date(y, m - 1 + step, 1);
+      return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+    }
+    return String(Number(key) + step);
+  }
+
+  const toNumber = (v, fallback = null) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.round(n * 100) / 100 : fallback;
+  };
+
+  /**
+   * 目標
+   *   measure: daily … 選んだ Daily の期間内の実施回数で自動集計
+   *            count … 数値を手で記録（target と unit）
+   *            check … 達成・未達成
+   */
+  function normalizeGoal(g) {
+    if (!g || typeof g !== 'object') return null;
+    const title = text(g.title, LIMITS.goalTitle).trim();
+    const period = GOAL_PERIODS.includes(g.period) ? g.period : null;
+    if (!title || !period || !isPeriodKey(period, g.periodKey)) return null;
+    const measure = GOAL_MEASURES.includes(g.measure) ? g.measure : 'check';
+    const now = new Date().toISOString();
+    const target = toNumber(g.target);
+    return {
+      id: typeof g.id === 'string' && g.id ? g.id : uid(),
+      title,
+      period,
+      periodKey: g.periodKey,
+      theme: text(g.theme, LIMITS.goalTheme).trim(),
+      measure,
+      target: measure === 'check' ? null : Math.min(target && target > 0 ? target : 1, 1000000),
+      unit: measure === 'count' ? text(g.unit, LIMITS.goalUnit).trim() : '',
+      current: measure === 'count' ? Math.max(0, Math.min(toNumber(g.current, 0), 1000000)) : 0,
+      dailyIds: measure === 'daily' && Array.isArray(g.dailyIds)
+        ? [...new Set(g.dailyIds.filter((x) => typeof x === 'string' && x))].slice(0, 20) : [],
+      done: measure === 'check' ? g.done === true : false,
+      parentId: typeof g.parentId === 'string' && g.parentId ? g.parentId : null,
+      createdAt: isoOr(g.createdAt, now),
+      updatedAt: isoOr(g.updatedAt, now),
+    };
+  }
+
   function normalizeState(data) {
-    const hasData = data && typeof data === 'object' && ['todos', 'dailies', 'journals'].some((k) => Array.isArray(data[k]));
+    const hasData = data && typeof data === 'object' && ['todos', 'dailies', 'journals', 'goals'].some((k) => Array.isArray(data[k]));
     if (!hasData) throw new Error('Kojin ToDo のデータ形式ではありません');
     const s = createEmptyState();
     s.todos = normalizeList(data.todos, normalizeTodo);
     s.dailies = normalizeList(data.dailies, normalizeDaily);
     s.journals = normalizeJournals(data.journals);
+    s.goals = normalizeList(data.goals, normalizeGoal);
     s.vision = normalizeVision(data.vision);
     s.visionImage = normalizeVisionImage(data.visionImage);
     const settings = data.settings || {};
@@ -297,6 +384,7 @@
       todos: state.todos.map((t) => ({ ...t })),
       dailies: state.dailies.map((d) => ({ ...d, days: d.days.slice(), doneDates: d.doneDates.slice() })),
       journals: state.journals.map((j) => ({ ...j, good: j.good.slice() })),
+      goals: state.goals.map((g) => ({ ...g, dailyIds: g.dailyIds.slice() })),
       vision: [state.vision, state.visionImage].filter(Boolean).map((v) => ({ ...v })),
     };
   }
@@ -304,7 +392,7 @@
   const byCreated = (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
 
   /** クラウドから受け取ったデータで置き換える（変更がなければ何もしない） */
-  function replaceCollections({ todos, dailies, journals, vision }) {
+  function replaceCollections({ todos, dailies, journals, goals, vision }) {
     let changed = false;
     if (todos) {
       const next = normalizeList(todos, normalizeTodo).sort(byCreated);
@@ -317,6 +405,10 @@
     if (journals) {
       const next = normalizeJournals(journals);
       if (!sameJson(next, state.journals)) { state.journals = next; changed = true; }
+    }
+    if (goals) {
+      const next = normalizeList(goals, normalizeGoal).sort(byCreated);
+      if (!sameJson(next, state.goals.slice().sort(byCreated))) { state.goals = next; changed = true; }
     }
     if (vision) {
       const main = normalizeVision(vision.find((v) => v && v.id === 'main'));
@@ -570,6 +662,95 @@
     return [...days].sort();
   }
 
+  /** 「前進した日」が何日続いているか（今日がまだなら昨日までを数える） */
+  function growthStreak(today) {
+    const days = new Set(growthDays(today));
+    let key = days.has(today) ? today : addDays(today, -1);
+    let count = 0;
+    while (days.has(key) && count < 3660) {
+      count += 1;
+      key = addDays(key, -1);
+    }
+    return count;
+  }
+
+  /* ------------------------------------------------------------------
+   * 目標
+   * ------------------------------------------------------------------ */
+  const findGoal = (id) => state.goals.find((g) => g.id === id) || null;
+
+  function goalsFor(period, key) {
+    return state.goals.filter((g) => g.period === period && g.periodKey === key);
+  }
+
+  /** 目標の進み具合 { value, target, achieved } */
+  function goalProgress(g) {
+    if (g.measure === 'check') return { value: g.done ? 1 : 0, target: 1, achieved: g.done };
+    if (g.measure === 'count') return { value: g.current, target: g.target, achieved: g.current >= g.target };
+    const [start, end] = periodRange(g.period, g.periodKey);
+    let value = 0;
+    g.dailyIds.forEach((id) => {
+      const d = findDaily(id);
+      if (d) value += d.doneDates.filter((k) => k >= start && k <= end).length;
+    });
+    return { value, target: g.target, achieved: value >= g.target };
+  }
+
+  function emitGoal(g) {
+    emitLocal([{ kind: 'goals', type: 'set', item: { ...g, dailyIds: g.dailyIds.slice() } }]);
+  }
+
+  function addGoal(input) {
+    const now = new Date().toISOString();
+    const goal = normalizeGoal({ ...input, id: uid(), createdAt: now, updatedAt: now });
+    if (!goal) return null;
+    state.goals.push(goal);
+    commit();
+    emitGoal(goal);
+    return goal;
+  }
+
+  function updateGoal(id, patch) {
+    const g = findGoal(id);
+    if (!g) return null;
+    const next = normalizeGoal({
+      ...g, ...patch, id: g.id, period: g.period, periodKey: g.periodKey, createdAt: g.createdAt, updatedAt: new Date().toISOString(),
+    });
+    if (!next) return null;
+    Object.assign(g, next);
+    commit();
+    emitGoal(g);
+    return g;
+  }
+
+  function setGoalDone(id, done) {
+    const g = findGoal(id);
+    if (!g || g.measure !== 'check' || g.done === !!done) return;
+    updateGoal(id, { done: !!done });
+  }
+
+  function changeGoalCount(id, delta) {
+    const g = findGoal(id);
+    if (!g || g.measure !== 'count') return;
+    updateGoal(id, { current: Math.max(0, toNumber(g.current + delta, 0)) });
+  }
+
+  function deleteGoal(id) {
+    const index = state.goals.findIndex((g) => g.id === id);
+    if (index < 0) return null;
+    const [item] = state.goals.splice(index, 1);
+    commit();
+    emitLocal([{ kind: 'goals', type: 'delete', id }]);
+    return { item, index };
+  }
+
+  function restoreGoal(entry) {
+    if (findGoal(entry.item.id)) return;
+    state.goals.splice(Math.min(entry.index, state.goals.length), 0, entry.item);
+    commit();
+    emitGoal(entry.item);
+  }
+
   /* ------------------------------------------------------------------
    * Vision
    * ------------------------------------------------------------------ */
@@ -620,7 +801,7 @@
     state = next;
     commit();
     emitLocal([{ type: 'replaceAll', ...snapshotForSync() }]);
-    return { todos: next.todos.length, dailies: next.dailies.length, journals: next.journals.length };
+    return { todos: next.todos.length, dailies: next.dailies.length, journals: next.journals.length, goals: next.goals.length };
   }
 
   function resetAll() {
@@ -669,6 +850,7 @@
     QUADRANTS,
     ALL_DAYS,
     START_VIEWS,
+    GOAL_PERIODS,
     LIMITS,
     IMAGE_MAX_CHARS,
     load,
@@ -682,6 +864,7 @@
     getTodo: findTodo,
     getDaily: findDaily,
     getJournal: findJournal,
+    getGoal: findGoal,
     addTodo,
     updateTodo,
     setTodoCompleted,
@@ -702,6 +885,18 @@
     saveJournal,
     journalStreak,
     growthDays,
+    growthStreak,
+    periodKeyOf,
+    periodRange,
+    shiftPeriod,
+    goalsFor,
+    goalProgress,
+    addGoal,
+    updateGoal,
+    setGoalDone,
+    changeGoalCount,
+    deleteGoal,
+    restoreGoal,
     saveVision,
     setVisionImage,
     setTheme,
