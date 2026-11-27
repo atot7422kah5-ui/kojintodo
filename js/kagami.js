@@ -21,7 +21,7 @@
   const SAVE_DELAY_MS = 15000; // 入力が止まってから送るまでの待ち時間
   const DEFAULTS = { repo: 'atot7422kah5-ui/jibunrikai', branch: 'main', path: 'journal/diary' };
   const MOOD_LABELS = { 1: 'しんどい', 2: 'いまいち', 3: 'ふつう', 4: 'いい感じ', 5: '最高' };
-  const MEMO_SOURCE_LABELS = { text: '', voice: '（音声）', photo: '（写真）' };
+  const MEMO_SOURCE_LABELS = { text: '', voice: '（音声）' };
   const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
 
   /* ---------------- 保存まわり ---------------- */

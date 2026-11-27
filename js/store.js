@@ -20,7 +20,7 @@
   const QUADRANTS = ['q1', 'q2', 'q3', 'q4'];
   const THEMES = ['auto', 'light', 'dark', 'discipline'];
   const START_VIEWS = ['today', 'vision', 'goals', 'journal', 'memo'];
-  const MEMO_SOURCES = ['text', 'voice', 'photo'];
+  const MEMO_SOURCES = ['text', 'voice'];
   const GOAL_PERIODS = ['week', 'month', 'year'];
   const GOAL_MEASURES = ['daily', 'count', 'check'];
   const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];

@@ -752,13 +752,12 @@
   }
 
   /* ------------------------------------------------------------------
-   * メモ（書く・話す・撮る）
+   * メモ（書く・話す）
    * ------------------------------------------------------------------ */
   const memoDialog = $('#memo-dialog');
   const memoForm = $('#memo-form');
-  const memoFile = $('#memo-file');
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const memo = { source: 'text', busy: false };
+  const memo = { source: 'text' };
   const voice = { rec: null, active: false, base: '', failed: false };
   let memoEditingId = null;
 
@@ -778,17 +777,6 @@
       voiceBtn.classList.toggle('is-recording', voice.active);
       $('[data-voice-label]', voiceBtn).textContent = voice.active ? '停止' : '音声';
     }
-    $$('.memo-composer button', viewEl).forEach((b) => {
-      if (b.dataset.action !== 'memo-voice') b.disabled = memo.busy;
-    });
-  }
-
-  /** 入力欄の末尾に、改行を挟んで文字を足す */
-  function appendToMemo(text) {
-    const input = memoInput();
-    if (!input) return;
-    const current = input.value.replace(/\s+$/, '');
-    input.value = current ? `${current}\n${text}` : text;
   }
 
   const VOICE_ERRORS = {
@@ -853,37 +841,6 @@
     }
   }
 
-  memoFile.addEventListener('change', async () => {
-    const file = memoFile.files && memoFile.files[0];
-    memoFile.value = '';
-    if (!file) return;
-    memo.busy = true;
-    updateMemoTools();
-    setMemoStatus('写真を読み取っています…（10〜30秒ほどかかります）');
-    try {
-      // Claude の推奨サイズ（長辺 1568px）に合わせ、文字が読める画質で送る
-      const image = await compressImage(file, { maxSide: 1568, maxChars: 4000000, startQuality: 0.9 });
-      const text = await K.ocr.transcribe({ data: image.dataUrl.split(',')[1], mediaType: 'image/jpeg' });
-      appendToMemo(text);
-      memo.source = 'photo';
-      setMemoStatus('読み取りました。内容を確認・修正して「追加」を押してください。');
-      vibrate(12);
-    } catch (e) {
-      setMemoStatus(e.userMessage || 'この画像は読み込めませんでした。JPEG または PNG の写真を選んでください。', true);
-    } finally {
-      memo.busy = false;
-      updateMemoTools();
-    }
-  });
-
-  function pickMemoPhoto() {
-    if (!K.ocr.hasKey()) {
-      setMemoStatus('写真の読み取りには、「設定・データ」→「手書きメモの読み取り」で Claude の API キーを保存してください。', true);
-      return;
-    }
-    memoFile.click();
-  }
-
   function addMemo() {
     const input = memoInput();
     if (!input) return;
@@ -915,7 +872,7 @@
     if (!m) return;
     memoEditingId = m.id;
     const time = new Date(m.createdAt).toTimeString().slice(0, 5);
-    const src = { text: 'タイピング', voice: '音声', photo: '写真' }[m.source] || '';
+    const src = { text: 'タイピング', voice: '音声' }[m.source] || '';
     $('[data-memo-meta]', memoForm).textContent = `${U.formatShort(m.date)} ${time}・${src}で入力`;
     memoForm.elements.text.value = m.text;
     showFieldError(memoForm, 'text', false);
@@ -1085,41 +1042,8 @@
     el.classList.toggle('is-error', isError);
   }
 
-  const claudeForm = $('#claude-form');
-
-  function setClaudeStatus(message, isError = false) {
-    const el = $('[data-claude-status]', claudeForm);
-    el.textContent = message || (K.ocr.hasKey() ? `保存済みです（${K.ocr.MODEL} で読み取ります）。変更するときだけ入力してください。` : '未設定です。');
-    el.classList.toggle('is-error', isError);
-  }
-
-  claudeForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const input = claudeForm.elements.apiKey;
-    const key = input.value.trim();
-    if (!key && !K.ocr.hasKey()) {
-      setClaudeStatus('API キーを入力してください。', true);
-      return;
-    }
-    if (key && !K.ocr.saveKey(key)) {
-      setClaudeStatus('この端末に保存できませんでした。', true);
-      return;
-    }
-    input.value = '';
-    setClaudeStatus('API キーを確かめています…');
-    try {
-      await K.ocr.testKey(key || null);
-      setClaudeStatus(`確認できました。メモ画面の「写真」で手書きメモを読み取れます（${K.ocr.MODEL}）。`);
-    } catch (err) {
-      setClaudeStatus(err.userMessage || '確認できませんでした。', true);
-    }
-  });
-
   function openSettings() {
     const { theme, startView } = S.getState().settings;
-    claudeForm.elements.apiKey.value = '';
-    claudeForm.elements.apiKey.placeholder = K.ocr.hasKey() ? '保存済み（変更するときだけ入力）' : 'sk-ant-...';
-    setClaudeStatus();
     $$('input[name="theme"]', settingsDialog).forEach((r) => { r.checked = r.value === theme; });
     $$('input[name="startView"]', settingsDialog).forEach((r) => { r.checked = r.value === startView; });
     setStorageMeta();
@@ -1388,7 +1312,6 @@
     'journal-month': (el) => shiftJournalMonth(Number(el.dataset.step)),
     'memo-add': () => addMemo(),
     'memo-voice': () => toggleVoice(),
-    'memo-photo': () => pickMemoPhoto(),
     'memo-prev': () => setMemoDate(U.addDays(ui.memoDate, -1)),
     'memo-next': () => setMemoDate(U.addDays(ui.memoDate, 1)),
     'memo-today': () => setMemoDate(U.dateKey()),
@@ -1397,12 +1320,6 @@
       const id = memoEditingId;
       memoDialog.close();
       if (id) deleteMemo(id);
-    },
-    'claude-forget': () => {
-      if (!window.confirm('この端末に保存した Claude の API キーを削除します。よろしいですか？')) return;
-      K.ocr.forgetKey();
-      claudeForm.elements.apiKey.placeholder = 'sk-ant-...';
-      setClaudeStatus('API キーを削除しました。');
     },
     'add-goal': () => openGoalDialog(),
     'edit-goal': (el) => openGoalDialog({ id: el.dataset.id }),

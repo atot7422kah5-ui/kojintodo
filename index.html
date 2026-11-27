@@ -246,20 +246,6 @@
           </form>
         </section>
 
-        <section class="field" aria-labelledby="claude-label">
-          <span class="field-label" id="claude-label">手書きメモの読み取り（Claude API）</span>
-          <p class="help">メモ画面の「写真」で、手書きのメモを文字に起こすのに使います（モデル：Claude Opus 5.5）。Claude Console（console.anthropic.com）で作成した API キーを貼り付けてください。キーはこの端末だけに保存され、同期やエクスポートには含まれません。写真は読み取りのために Anthropic に送信されます。</p>
-          <form id="claude-form" class="key-form" autocomplete="off" novalidate>
-            <label class="key-row"><span class="help">API キー</span>
-              <input class="input" type="password" name="apiKey" autocomplete="off" spellcheck="false" placeholder="sk-ant-..."></label>
-            <div class="btn-row">
-              <button type="submit" class="btn btn-secondary">保存して確かめる</button>
-              <button type="button" class="btn btn-danger-outline" data-action="claude-forget">キーを削除</button>
-            </div>
-            <p class="help" data-claude-status role="status"></p>
-          </form>
-        </section>
-
         <div class="field">
           <span class="field-label">データのバックアップ</span>
           <p class="help">データはこのブラウザ内（localStorage）に保存されます（同期中はクラウドにも保存）。定期的なバックアップや、同期を使わずに別の端末へ移すときはエクスポートをご利用ください。</p>
@@ -317,8 +303,6 @@
       </footer>
     </form>
   </dialog>
-
-  <input type="file" id="memo-file" accept="image/*" hidden>
 
   <!-- 目標の追加・編集ダイアログ -->
   <dialog id="goal-dialog" class="sheet" aria-labelledby="goal-dialog-title">
@@ -462,7 +446,6 @@
   <script src="js/views.js?v=20261127-4"></script>
   <script src="js/firebase-config.js?v=20261127-4"></script>
   <script src="js/sync.js?v=20261127-4"></script>
-  <script src="js/ocr.js?v=20261127-4"></script>
   <script src="js/app.js?v=20261127-4"></script>
   <script src="js/kagami.js?v=20261127-4"></script>
 </body>

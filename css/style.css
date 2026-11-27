@@ -2541,10 +2541,6 @@ dialog.lightbox::backdrop { background: #000; }
 
 .memo-kagami { margin-top: 10px; }
 
-/* API キーなどの入力欄 */
-.key-form { display: grid; gap: 8px; margin-top: 8px; }
-.key-row { display: grid; gap: 4px; }
-
 /* ==========================================================================
    お祝い（Daily をすべて完了したとき）
    ========================================================================== */
