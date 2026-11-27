@@ -8,13 +8,13 @@
   const S = K.store;
   const V = K.views;
 
-  const VIEWS = ['today', 'daily', 'todo', 'matrix', 'vision', 'goals', 'journal'];
+  const VIEWS = ['today', 'daily', 'todo', 'matrix', 'vision', 'goals', 'journal', 'memo'];
   const VIEW_TITLES = {
-    today: '今日', daily: 'Daily', todo: 'ToDo', matrix: 'マトリクス', vision: 'Vision', goals: '目標', journal: '日記',
+    today: '今日', daily: 'Daily', todo: 'ToDo', matrix: 'マトリクス', vision: 'Vision', goals: '目標', journal: '日記', memo: 'メモ',
   };
   // 「タスク」と「ライフ」のどちらの画面か
   const VIEW_MODE = {
-    today: 'task', daily: 'task', todo: 'task', matrix: 'task', vision: 'life', goals: 'life', journal: 'life',
+    today: 'task', daily: 'task', todo: 'task', matrix: 'task', vision: 'life', goals: 'life', journal: 'life', memo: 'life',
   };
   const THEME_COLORS = { light: '#f5f6f8', dark: '#0f1115', discipline: '#0a0b0e' };
   const CHECK_ANIMATION_MS = 220;
@@ -30,6 +30,7 @@
     journalDate: U.dateKey(),
     journalMonth: U.dateKey().slice(0, 7),
     goalPeriod: { period: 'week', key: S.periodKeyOf('week', U.dateKey()) },
+    memoDate: U.dateKey(),
   };
   let pendingFocus = null; // 再描画後にフォーカスを戻す要素のセレクタ
 
@@ -81,22 +82,26 @@
   }
 
   /**
-   * 日記の入力欄は再描画で作り直さない（入力中の文字・カーソル・日本語変換を守るため）。
-   * 同じ日付の入力欄が表示中なら、それ以外の部分（data-part）だけを差し替える。
+   * 日記・メモの入力欄は再描画で作り直さない（入力中の文字・カーソル・日本語変換・音声入力を守るため）。
+   * 同じ入力欄（data-keep が同じ）が表示中なら、それ以外の部分（data-part）だけを差し替える。
    */
-  function patchJournalView(html) {
-    const editor = $('#journal-form', viewEl);
-    if (!editor || editor.dataset.date !== ui.journalDate) return false;
+  function patchKeptEditor(html) {
+    const editor = $('[data-part="editor"][data-keep]', viewEl);
+    if (!editor) return false;
     const tmp = document.createElement('div');
     tmp.innerHTML = html;
     const next = tmp.firstElementChild;
+    const nextEditor = next && $('[data-part="editor"]', next);
+    if (!nextEditor || nextEditor.dataset.keep !== editor.dataset.keep) return false;
     const current = viewEl.firstElementChild;
     $$(':scope > [data-part]', next).forEach((part) => {
       if (part.dataset.part === 'editor') return;
       const old = $(`:scope > [data-part="${part.dataset.part}"]`, current);
       if (old) old.replaceWith(part);
     });
-    if (!editor.contains(document.activeElement) && !journal.dirty) fillJournalForm(editor, S.getJournal(ui.journalDate));
+    if (ui.view === 'journal' && !editor.contains(document.activeElement) && !journal.dirty) {
+      fillJournalForm(editor, S.getJournal(ui.journalDate));
+    }
     return true;
   }
 
@@ -108,7 +113,7 @@
 
     const ctx = { state: S.getState(), today, ui, storageOk: S.isStorageAvailable(), touch: isTouch() };
     const html = V.render(ui.view, ctx);
-    if (!(ui.view === 'journal' && patchJournalView(html))) {
+    if (!patchKeptEditor(html)) {
       viewEl.innerHTML = html;
       restoreFocus(focus);
     }
@@ -127,6 +132,7 @@
       todo: sum.open.length || '',
       matrix: '',
       journal: S.getJournal(ctx.today) ? '✓' : '',
+      memo: S.memosFor(ctx.today).length || '',
       goals: (() => {
         const goals = S.goalsFor('week', S.periodKeyOf('week', ctx.today));
         return goals.length ? `${goals.filter((g) => S.goalProgress(g).achieved).length}/${goals.length}` : '';
@@ -746,6 +752,203 @@
   }
 
   /* ------------------------------------------------------------------
+   * メモ（書く・話す・撮る）
+   * ------------------------------------------------------------------ */
+  const memoDialog = $('#memo-dialog');
+  const memoForm = $('#memo-form');
+  const memoFile = $('#memo-file');
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const memo = { source: 'text', busy: false };
+  const voice = { rec: null, active: false, base: '', failed: false };
+  let memoEditingId = null;
+
+  const memoInput = () => $('#memo-text', viewEl);
+
+  function setMemoStatus(message, isError = false) {
+    const el = $('[data-memo-status]', viewEl);
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('is-error', Boolean(message) && isError);
+  }
+
+  function updateMemoTools() {
+    const voiceBtn = $('[data-action="memo-voice"]', viewEl);
+    if (voiceBtn) {
+      voiceBtn.setAttribute('aria-pressed', String(voice.active));
+      voiceBtn.classList.toggle('is-recording', voice.active);
+      $('[data-voice-label]', voiceBtn).textContent = voice.active ? '停止' : '音声';
+    }
+    $$('.memo-composer button', viewEl).forEach((b) => {
+      if (b.dataset.action !== 'memo-voice') b.disabled = memo.busy;
+    });
+  }
+
+  /** 入力欄の末尾に、改行を挟んで文字を足す */
+  function appendToMemo(text) {
+    const input = memoInput();
+    if (!input) return;
+    const current = input.value.replace(/\s+$/, '');
+    input.value = current ? `${current}\n${text}` : text;
+  }
+
+  const VOICE_ERRORS = {
+    'not-allowed': 'マイクの使用が許可されていません。ブラウザ（またはアプリ）の設定でマイクを許可してください。',
+    'service-not-allowed': 'この端末では音声入力を使えません。キーボードのマイクボタンからお試しください。',
+    'no-speech': '声が聞き取れませんでした。もう一度「音声」を押して話してください。',
+    'audio-capture': 'マイクが見つかりません。マイクの接続を確認してください。',
+    network: '音声入力にはインターネット接続が必要です。接続を確認してください。',
+  };
+
+  function stopVoice() {
+    if (voice.active && voice.rec) voice.rec.stop();
+  }
+
+  function toggleVoice() {
+    if (voice.active) {
+      stopVoice();
+      return;
+    }
+    if (!SpeechRecognition) {
+      setMemoStatus('このブラウザは音声入力に対応していません。キーボードのマイクボタンから音声で入力できます。', true);
+      return;
+    }
+    const input = memoInput();
+    if (!input) return;
+    const rec = new SpeechRecognition();
+    rec.lang = 'ja-JP';
+    rec.interimResults = true;
+    rec.continuous = true;
+    voice.rec = rec;
+    voice.failed = false;
+    const current = input.value.replace(/\s+$/, '');
+    voice.base = current ? `${current}\n` : '';
+    rec.onstart = () => {
+      voice.active = true;
+      memo.source = 'voice';
+      updateMemoTools();
+      setMemoStatus('聞き取っています…（話し終えたら「停止」を押してください）');
+      vibrate(12);
+    };
+    rec.onresult = (e) => {
+      let text = '';
+      for (let i = 0; i < e.results.length; i += 1) text += e.results[i][0].transcript;
+      const el = memoInput();
+      if (el) el.value = voice.base + text;
+    };
+    rec.onerror = (e) => {
+      if (e.error === 'aborted') return;
+      voice.failed = true;
+      setMemoStatus(VOICE_ERRORS[e.error] || `音声入力でエラーが起きました（${e.error}）。`, true);
+    };
+    rec.onend = () => {
+      voice.active = false;
+      updateMemoTools();
+      const el = memoInput();
+      if (!voice.failed) setMemoStatus(el && el.value.trim() ? '音声を入力しました。内容を確認して「追加」を押してください。' : '');
+    };
+    try {
+      rec.start();
+    } catch (e) {
+      setMemoStatus('音声入力を開始できませんでした。もう一度お試しください。', true);
+    }
+  }
+
+  memoFile.addEventListener('change', async () => {
+    const file = memoFile.files && memoFile.files[0];
+    memoFile.value = '';
+    if (!file) return;
+    memo.busy = true;
+    updateMemoTools();
+    setMemoStatus('写真を読み取っています…（10〜30秒ほどかかります）');
+    try {
+      // Claude の推奨サイズ（長辺 1568px）に合わせ、文字が読める画質で送る
+      const image = await compressImage(file, { maxSide: 1568, maxChars: 4000000, startQuality: 0.9 });
+      const text = await K.ocr.transcribe({ data: image.dataUrl.split(',')[1], mediaType: 'image/jpeg' });
+      appendToMemo(text);
+      memo.source = 'photo';
+      setMemoStatus('読み取りました。内容を確認・修正して「追加」を押してください。');
+      vibrate(12);
+    } catch (e) {
+      setMemoStatus(e.userMessage || 'この画像は読み込めませんでした。JPEG または PNG の写真を選んでください。', true);
+    } finally {
+      memo.busy = false;
+      updateMemoTools();
+    }
+  });
+
+  function pickMemoPhoto() {
+    if (!K.ocr.hasKey()) {
+      setMemoStatus('写真の読み取りには、「設定・データ」→「手書きメモの読み取り」で Claude の API キーを保存してください。', true);
+      return;
+    }
+    memoFile.click();
+  }
+
+  function addMemo() {
+    const input = memoInput();
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) {
+      setMemoStatus('メモを入力してください。', true);
+      input.focus();
+      return;
+    }
+    stopVoice();
+    const source = memo.source;
+    input.value = '';
+    memo.source = 'text';
+    S.addMemo({ text, source, date: ui.memoDate });
+    setMemoStatus('追加しました。');
+    vibrate(10);
+  }
+
+  function setMemoDate(date) {
+    stopVoice();
+    const today = U.dateKey();
+    ui.memoDate = date > today ? today : date;
+    memo.source = 'text';
+    render();
+  }
+
+  function openMemoDialog(id) {
+    const m = S.getMemo(id);
+    if (!m) return;
+    memoEditingId = m.id;
+    const time = new Date(m.createdAt).toTimeString().slice(0, 5);
+    const src = { text: 'タイピング', voice: '音声', photo: '写真' }[m.source] || '';
+    $('[data-memo-meta]', memoForm).textContent = `${U.formatShort(m.date)} ${time}・${src}で入力`;
+    memoForm.elements.text.value = m.text;
+    showFieldError(memoForm, 'text', false);
+    memoDialog.showModal();
+    if (!isTouch()) memoForm.elements.text.focus();
+  }
+
+  memoForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = memoForm.elements.text.value.trim();
+    if (!text) {
+      showFieldError(memoForm, 'text', true);
+      return;
+    }
+    if (memoEditingId) S.updateMemo(memoEditingId, { text });
+    memoDialog.close();
+  });
+
+  function deleteMemo(id) {
+    const entry = S.deleteMemo(id);
+    if (!entry) return;
+    toast('メモを削除しました', { action: '元に戻す', onAction: () => S.restoreMemo(entry) });
+  }
+
+  // PC：メモ欄で Ctrl（Mac は ⌘）＋ Enter を押すと追加
+  viewEl.addEventListener('keydown', (e) => {
+    if (e.target.id === 'memo-text' && e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+      e.preventDefault();
+      addMemo();
+    }
+  });
+
+  /* ------------------------------------------------------------------
    * Vision
    * ------------------------------------------------------------------ */
   const visionDialog = $('#vision-dialog');
@@ -806,11 +1009,11 @@
   }
 
   /** 画像を JPEG に変換し、目安のサイズに収まるまで画質・大きさを下げる */
-  async function compressImage(file) {
+  async function compressImage(file, { maxSide = 1800, maxChars = IMAGE_TARGET_CHARS, startQuality = 0.86 } = {}) {
     const { img, url } = await loadImage(file);
     try {
-      let scale = Math.min(1, 1800 / Math.max(img.naturalWidth, img.naturalHeight));
-      let quality = 0.86;
+      let scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+      let quality = startQuality;
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       for (let i = 0; i < 14; i += 1) {
@@ -822,7 +1025,7 @@
         ctx.fillRect(0, 0, w, h);
         ctx.drawImage(img, 0, 0, w, h);
         const dataUrl = canvas.toDataURL('image/jpeg', quality);
-        if (dataUrl.length <= IMAGE_TARGET_CHARS) return { dataUrl, width: w, height: h };
+        if (dataUrl.length <= maxChars) return { dataUrl, width: w, height: h };
         if (quality > 0.62) quality -= 0.08;
         else scale *= 0.85;
       }
@@ -877,13 +1080,46 @@
     } else {
       const s = S.getState();
       const kb = (new Blob([JSON.stringify(s)]).size / 1024).toFixed(1);
-      el.textContent = `現在のデータ：ToDo ${s.todos.length}件・Daily ${s.dailies.length}件・目標 ${s.goals.length}件・日記 ${s.journals.length}件（約 ${kb} KB）`;
+      el.textContent = `現在のデータ：ToDo ${s.todos.length}件・Daily ${s.dailies.length}件・目標 ${s.goals.length}件・日記 ${s.journals.length}件・メモ ${s.memos.length}件（約 ${kb} KB）`;
     }
     el.classList.toggle('is-error', isError);
   }
 
+  const claudeForm = $('#claude-form');
+
+  function setClaudeStatus(message, isError = false) {
+    const el = $('[data-claude-status]', claudeForm);
+    el.textContent = message || (K.ocr.hasKey() ? `保存済みです（${K.ocr.MODEL} で読み取ります）。変更するときだけ入力してください。` : '未設定です。');
+    el.classList.toggle('is-error', isError);
+  }
+
+  claudeForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = claudeForm.elements.apiKey;
+    const key = input.value.trim();
+    if (!key && !K.ocr.hasKey()) {
+      setClaudeStatus('API キーを入力してください。', true);
+      return;
+    }
+    if (key && !K.ocr.saveKey(key)) {
+      setClaudeStatus('この端末に保存できませんでした。', true);
+      return;
+    }
+    input.value = '';
+    setClaudeStatus('API キーを確かめています…');
+    try {
+      await K.ocr.testKey(key || null);
+      setClaudeStatus(`確認できました。メモ画面の「写真」で手書きメモを読み取れます（${K.ocr.MODEL}）。`);
+    } catch (err) {
+      setClaudeStatus(err.userMessage || '確認できませんでした。', true);
+    }
+  });
+
   function openSettings() {
     const { theme, startView } = S.getState().settings;
+    claudeForm.elements.apiKey.value = '';
+    claudeForm.elements.apiKey.placeholder = K.ocr.hasKey() ? '保存済み（変更するときだけ入力）' : 'sk-ant-...';
+    setClaudeStatus();
     $$('input[name="theme"]', settingsDialog).forEach((r) => { r.checked = r.value === theme; });
     $$('input[name="startView"]', settingsDialog).forEach((r) => { r.checked = r.value === startView; });
     setStorageMeta();
@@ -926,14 +1162,14 @@
       const result = S.importJson(textContent);
       applyTheme();
       settingsDialog.close();
-      toast(`インポートしました（ToDo ${result.todos}件・Daily ${result.dailies}件・目標 ${result.goals}件・日記 ${result.journals}件）`);
+      toast(`インポートしました（ToDo ${result.todos}件・Daily ${result.dailies}件・目標 ${result.goals}件・日記 ${result.journals}件・メモ ${result.memos}件）`);
     } catch (err) {
       setStorageMeta('読み込めませんでした。Kojin ToDo からエクスポートした JSON ファイルを選択してください。', true);
     }
   });
 
   function resetAll() {
-    if (!window.confirm(`すべての Daily・ToDo・目標・日記・Vision を削除します。この操作は元に戻せません。よろしいですか？${syncNote()}`)) return;
+    if (!window.confirm(`すべての Daily・ToDo・目標・日記・メモ・Vision を削除します。この操作は元に戻せません。よろしいですか？${syncNote()}`)) return;
     S.resetAll();
     settingsDialog.close();
     toast('すべてのデータを削除しました');
@@ -1043,7 +1279,7 @@
   }
 
   function syncLogout() {
-    const ok = window.confirm('ログアウトすると、この端末からデータ（タスク・目標・日記・Vision）が消去されます（クラウドには残り、再度ログインすると表示されます）。ログアウトしますか？');
+    const ok = window.confirm('ログアウトすると、この端末からデータ（タスク・目標・日記・メモ・Vision）が消去されます（クラウドには残り、再度ログインすると表示されます）。ログアウトしますか？');
     if (!ok) return;
     syncAction(async () => {
       flushJournal();
@@ -1150,6 +1386,24 @@
     'journal-today': () => setJournalDate(U.dateKey()),
     'journal-date': (el) => setJournalDate(el.dataset.date),
     'journal-month': (el) => shiftJournalMonth(Number(el.dataset.step)),
+    'memo-add': () => addMemo(),
+    'memo-voice': () => toggleVoice(),
+    'memo-photo': () => pickMemoPhoto(),
+    'memo-prev': () => setMemoDate(U.addDays(ui.memoDate, -1)),
+    'memo-next': () => setMemoDate(U.addDays(ui.memoDate, 1)),
+    'memo-today': () => setMemoDate(U.dateKey()),
+    'edit-memo': (el) => openMemoDialog(el.dataset.id),
+    'dialog-delete-memo': () => {
+      const id = memoEditingId;
+      memoDialog.close();
+      if (id) deleteMemo(id);
+    },
+    'claude-forget': () => {
+      if (!window.confirm('この端末に保存した Claude の API キーを削除します。よろしいですか？')) return;
+      K.ocr.forgetKey();
+      claudeForm.elements.apiKey.placeholder = 'sk-ant-...';
+      setClaudeStatus('API キーを削除しました。');
+    },
     'add-goal': () => openGoalDialog(),
     'edit-goal': (el) => openGoalDialog({ id: el.dataset.id }),
     'goal-inc': (el) => changeGoalCount(el.dataset.id, 1),
@@ -1288,7 +1542,7 @@
 
   /* ------------------------------------------------------------------
    * キーボードショートカット（PC）
-   *   N: 新規追加欄へ移動 / 1〜7: 画面切り替え / Esc: 入力欄から抜ける
+   *   N: 新規追加欄へ移動 / 1〜8: 画面切り替え / Esc: 入力欄から抜ける
    * ------------------------------------------------------------------ */
   document.addEventListener('keydown', (e) => {
     if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -1301,7 +1555,7 @@
     }
     const typing = target.matches && target.matches('input, textarea, select, [contenteditable="true"]');
     if (typing) {
-      if (e.key === 'Escape' && (target.closest('[data-quick]') || target.closest('#journal-form'))) target.blur();
+      if (e.key === 'Escape' && (target.closest('[data-quick]') || target.closest('#journal-form') || target.id === 'memo-text')) target.blur();
       return;
     }
     if (document.querySelector('dialog[open]')) return;
@@ -1311,7 +1565,7 @@
         e.preventDefault();
         input.focus();
       }
-    } else if (/^[1-7]$/.test(e.key)) {
+    } else if (/^[1-8]$/.test(e.key)) {
       location.hash = `#${VIEWS[Number(e.key) - 1]}`;
     }
   });
@@ -1323,7 +1577,7 @@
     const loaded = S.load();
     applyTheme();
     hydrateIcons();
-    [taskDialog, dailyDialog, settingsDialog, visionDialog, goalDialog, lightbox].forEach(setupDialog);
+    [taskDialog, dailyDialog, settingsDialog, visionDialog, goalDialog, memoDialog, lightbox].forEach(setupDialog);
 
     // URL に画面の指定がなければ、設定した「最初に開く画面」を表示する
     const startView = S.getState().settings.startView;
@@ -1341,10 +1595,12 @@
     window.addEventListener('hashchange', () => {
       flushJournal();
       const next = viewFromHash();
+      if (next !== 'memo') stopVoice();
       if (next === 'journal' && ui.view !== 'journal') {
         ui.journalDate = U.dateKey();
         ui.journalMonth = ui.journalDate.slice(0, 7);
       }
+      if (next === 'memo' && ui.view !== 'memo') ui.memoDate = U.dateKey();
       ui.view = next;
       render();
       window.scrollTo(0, 0);

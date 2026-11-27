@@ -2,8 +2,9 @@
  * kagami.js — 日記を GitHub のリポジトリ（自己理解パートナー「カガミ」）へ送る
  *
  * 設定ダイアログの「カガミ連携」で GitHub のトークン・リポジトリを保存すると、
- * 日記を保存したとき（と、アプリを開いたとき）に、変更のあった日の日記を
+ * 日記・メモを保存したとき（と、アプリを開いたとき）に、変更のあった日の日記を
  * `<path>/<YYYY-MM-DD>.md` として GitHub に書き込みます。
+ * その日のメモ（メモ画面で書いたもの）は、同じファイルの「## 今日のメモ」に入ります。
  *
  * - トークンはこの端末の localStorage にだけ保存します（クラウド同期・エクスポートには含めません）。
  * - 通信先は https://api.github.com だけです。
@@ -20,6 +21,7 @@
   const SAVE_DELAY_MS = 15000; // 入力が止まってから送るまでの待ち時間
   const DEFAULTS = { repo: 'atot7422kah5-ui/jibunrikai', branch: 'main', path: 'journal/diary' };
   const MOOD_LABELS = { 1: 'しんどい', 2: 'いまいち', 3: 'ふつう', 4: 'いい感じ', 5: '最高' };
+  const MEMO_SOURCE_LABELS = { text: '', voice: '（音声）', photo: '（写真）' };
   const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
 
   /* ---------------- 保存まわり ---------------- */
@@ -52,7 +54,40 @@
   }
   const clean = (s) => String(s || '').replace(/\r\n?/g, '\n').trim();
 
-  function toMarkdown(j) {
+  function timeOf(iso) {
+    const d = new Date(iso);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+
+  /** メモを時刻順の箇条書きにする（2行目以降は字下げして同じ項目に含める） */
+  function memoSection(memos) {
+    if (!memos.length) return [];
+    const items = memos.map((m) => {
+      const [first, ...rest] = clean(m.text).split('\n');
+      return [`- ${timeOf(m.createdAt)}${MEMO_SOURCE_LABELS[m.source] || ''} ${first}`, ...rest.map((l) => `  ${l}`)].join('\n');
+    });
+    return ['## 今日のメモ', ...items, ''];
+  }
+
+  /** その日の日記（なければ null）とメモから、送る Markdown を作る */
+  function buildMarkdown(date, journal, memos) {
+    if (journal) return toMarkdown(journal, memos);
+    return [
+      '---',
+      `date: ${date}`,
+      'mood: ',
+      'source: kojintodo',
+      '---',
+      '',
+      `# ${date}（${weekday(date)}）の日記`,
+      '',
+      '（この日の日記はまだありません）',
+      '',
+      ...memoSection(memos),
+    ].join('\n');
+  }
+
+  function toMarkdown(j, memos = []) {
     const goods = (j.good || []).map(clean);
     const lines = [
       '---',
@@ -78,6 +113,7 @@
       '## 自由メモ',
       clean(j.memo) || '（未記入）',
       '',
+      ...memoSection(memos),
     ];
     return lines.join('\n');
   }
@@ -174,17 +210,21 @@
     try {
       const pushed = readJson(PUSHED_KEY, {});
       const journals = S.getState().journals || [];
-      for (const j of journals) {
-        const md = toMarkdown(j);
+      const memos = S.getState().memos || [];
+      // 日記のある日と、メモだけの日の両方を送る
+      const dates = [...new Set([...journals.map((j) => j.date), ...memos.map((m) => m.date)])].sort();
+      for (const date of dates) {
+        const journal = journals.find((j) => j.date === date) || null;
+        const md = buildMarkdown(date, journal, memos.filter((m) => m.date === date));
         const h = hash(`${cfg.repo}|${cfg.branch}|${cfg.path}|${md}`);
-        if (pushed[j.date] === h) continue;
-        setStatus('sending', `${j.date} の日記を送っています…`);
-        const result = await pushEntry(cfg, j, md);
-        pushed[j.date] = h;
+        if (pushed[date] === h) continue;
+        setStatus('sending', `${date} の日記を送っています…`);
+        const result = await pushEntry(cfg, { date }, md);
+        pushed[date] = h;
         writeJson(PUSHED_KEY, pushed);
         if (result !== 'same') sent += 1;
       }
-      setStatus('ok', sent ? `${sent} 日分をカガミに送りました` : (journals.length ? 'カガミと同じ内容です' : '送る日記はまだありません'));
+      setStatus('ok', sent ? `${sent} 日分をカガミに送りました` : (dates.length ? 'カガミと同じ内容です' : '送る日記はまだありません'));
     } catch (e) {
       setStatus('error', e && e.message ? e.message : 'カガミへの送信に失敗しました。');
     } finally {
@@ -314,5 +354,5 @@
   setupUi();
   if (getConfig()) schedule(5000); // 開いたときに、ほかの端末で書いた分も含めて確かめる
 
-  K.kagami = { toMarkdown, syncAll, getConfig };
+  K.kagami = { toMarkdown, buildMarkdown, syncAll, getConfig };
 })(window.Kojin = window.Kojin || {});

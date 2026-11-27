@@ -39,6 +39,10 @@
     left: '<path d="m15 5-7 7 7 7"/>',
     target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="0.6"/>',
     minus: '<path d="M5 12h14"/>',
+    mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/>',
+    camera: '<path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/>',
+    keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6.5 10h.01M9.5 10h.01M12.5 10h.01M15.5 10h.01M17.5 10h.01M7.5 14h9"/>',
+    memo: '<path d="M5 4h14v10l-6 6H5z"/><path d="M13 20v-6h6"/><path d="M8.5 8.5h7M8.5 12h4"/>',
     up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
     right: '<path d="m9 5 7 7-7 7"/>',
     sparkle: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',
@@ -756,7 +760,7 @@
         <span class="stat-chip">${icon('repeat')}Daily ${p.total ? `${p.done} / ${p.total} 完了` : 'なし'}</span>
         <span class="stat-chip">${icon('check')}ToDo ${doneTodos} 件完了</span>
       </div>
-      <form class="journal-form" id="journal-form" data-part="editor" data-date="${date}" autocomplete="off" novalidate>
+      <form class="journal-form" id="journal-form" data-part="editor" data-keep="journal:${date}" data-date="${date}" autocomplete="off" novalidate>
         <fieldset class="jfield">
           <legend class="jlabel">今日の気分</legend>
           <div class="mood-row">${moods}</div>
@@ -879,6 +883,72 @@
     </div>`;
   }
 
+  /* ------------------------------------------------------------------
+   * 画面：メモ（書く・話す・撮る）
+   * ------------------------------------------------------------------ */
+  const MEMO_SOURCES = {
+    text: { icon: 'keyboard', label: 'タイピング' },
+    voice: { icon: 'mic', label: '音声' },
+    photo: { icon: 'camera', label: '写真' },
+  };
+
+  function timeOf(iso) {
+    const d = new Date(iso);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+
+  function memoItem(m) {
+    const src = MEMO_SOURCES[m.source] || MEMO_SOURCES.text;
+    return `<li class="memo-item" data-id="${esc(m.id)}">
+      <div class="memo-meta">
+        <span class="memo-time">${timeOf(m.createdAt)}</span>
+        <span class="memo-source">${icon(src.icon)}${src.label}</span>
+        <span class="spacer"></span>
+        <button type="button" class="icon-btn" data-action="edit-memo" data-id="${esc(m.id)}" aria-label="${timeOf(m.createdAt)} のメモを編集">${icon('edit')}</button>
+      </div>
+      <p class="memo-text">${esc(m.text)}</p>
+    </li>`;
+  }
+
+  function viewMemo(ctx) {
+    const { today, ui } = ctx;
+    const date = ui.memoDate;
+    const isToday = date === today;
+    const memos = S.memosFor(date).slice().reverse(); // 新しい順
+    const kagami = K.kagami && K.kagami.getConfig && K.kagami.getConfig();
+    return `<div class="view view-memo">
+      <div data-part="banner">${storageBanner(ctx)}</div>
+      <header class="view-header" data-part="header">
+        <p class="eyebrow">Memo</p>
+        <h1 class="view-title">メモ</h1>
+        <p class="view-desc">書く・話す・撮るで、思いついたことをすぐ残す</p>
+      </header>
+      <div class="journal-datebar" data-part="datebar">
+        <button type="button" class="icon-btn" data-action="memo-prev" aria-label="前の日">${icon('left')}</button>
+        <p class="journal-date">${formatMonthDay(date)}${isToday ? '<span class="pill">今日</span>' : ''}</p>
+        <button type="button" class="icon-btn" data-action="memo-next" aria-label="次の日"${isToday ? ' disabled' : ''}>${icon('right')}</button>
+        ${isToday ? '' : '<button type="button" class="btn btn-ghost btn-sm" data-action="memo-today">今日へ</button>'}
+      </div>
+      <section class="memo-composer" data-part="editor" data-keep="memo:${date}" aria-label="メモを書く">
+        <textarea class="textarea memo-input" id="memo-text" rows="3" maxlength="${S.LIMITS.memo}" placeholder="${ctx.touch ? '思いついたことを書く' : '思いついたことを書く（Ctrl＋Enter で追加）'}" aria-label="メモ"></textarea>
+        <div class="memo-actions">
+          <button type="button" class="memo-tool" data-action="memo-voice" aria-pressed="false">${icon('mic')}<span data-voice-label>音声</span></button>
+          <button type="button" class="memo-tool" data-action="memo-photo">${icon('camera')}<span>写真</span></button>
+          <span class="spacer"></span>
+          <button type="button" class="btn btn-primary" data-action="memo-add">${icon('plus')}追加</button>
+        </div>
+        <p class="memo-status" data-memo-status role="status" aria-live="polite"></p>
+      </section>
+      <section class="section" data-part="list">
+        ${sectionHead(isToday ? '今日のメモ' : `${formatMonthDay(date)}のメモ`, memos.length)}
+        ${memos.length
+          ? `<ul class="memo-list">${memos.map(memoItem).join('')}</ul>`
+          : '<p class="muted-box">まだメモはありません。上の欄に書くか、「音声」「写真」から入力できます。</p>'}
+        ${kagami && kagami.enabled ? '<p class="section-desc memo-kagami">カガミ連携中：メモはその日の日記ファイルに「今日のメモ」として送られます。</p>' : ''}
+      </section>
+    </div>`;
+  }
+
   /* ------------------------------------------------------------------ */
   const VIEWS = {
     today: viewToday,
@@ -888,6 +958,7 @@
     vision: viewVision,
     goals: viewGoals,
     journal: viewJournal,
+    memo: viewMemo,
   };
 
   K.views = {
