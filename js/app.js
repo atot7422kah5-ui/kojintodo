@@ -8,14 +8,15 @@
   const S = K.store;
   const V = K.views;
 
-  const VIEWS = ['today', 'daily', 'todo', 'matrix', 'vision', 'journal'];
+  const VIEWS = ['today', 'daily', 'todo', 'matrix', 'vision', 'goals', 'journal'];
   const VIEW_TITLES = {
-    today: '今日', daily: 'Daily', todo: 'ToDo', matrix: 'マトリクス', vision: 'Vision', journal: '日記',
+    today: '今日', daily: 'Daily', todo: 'ToDo', matrix: 'マトリクス', vision: 'Vision', goals: '目標', journal: '日記',
   };
   // 「タスク」と「ライフ」のどちらの画面か
   const VIEW_MODE = {
-    today: 'task', daily: 'task', todo: 'task', matrix: 'task', vision: 'life', journal: 'life',
+    today: 'task', daily: 'task', todo: 'task', matrix: 'task', vision: 'life', goals: 'life', journal: 'life',
   };
+  const THEME_COLORS = { light: '#f5f6f8', dark: '#0f1115', discipline: '#0a0b0e' };
   const CHECK_ANIMATION_MS = 220;
   const JOURNAL_SAVE_DELAY = 600;
   const IMAGE_TARGET_CHARS = 700000; // 圧縮後の画像の目安（Firestore の上限に余裕を持たせる）
@@ -28,6 +29,7 @@
     lastByMode: { task: 'today', life: 'vision' },
     journalDate: U.dateKey(),
     journalMonth: U.dateKey().slice(0, 7),
+    goalPeriod: { period: 'week', key: S.periodKeyOf('week', U.dateKey()) },
   };
   let pendingFocus = null; // 再描画後にフォーカスを戻す要素のセレクタ
 
@@ -110,6 +112,9 @@
       viewEl.innerHTML = html;
       restoreFocus(focus);
     }
+    // 積み上げのマス目は最新の日（右端）が見えるようにする
+    const heat = $('.heat-scroll', viewEl);
+    if (heat) heat.scrollLeft = heat.scrollWidth;
     updateNav(ctx);
   }
 
@@ -122,6 +127,10 @@
       todo: sum.open.length || '',
       matrix: '',
       journal: S.getJournal(ctx.today) ? '✓' : '',
+      goals: (() => {
+        const goals = S.goalsFor('week', S.periodKeyOf('week', ctx.today));
+        return goals.length ? `${goals.filter((g) => S.goalProgress(g).achieved).length}/${goals.length}` : '';
+      })(),
     };
     $$('[data-count]').forEach((el) => { el.textContent = counts[el.dataset.count]; });
     $$('[data-badge="today"]').forEach((el) => {
@@ -159,11 +168,11 @@
   function applyTheme() {
     const theme = S.getState().settings.theme;
     const root = document.documentElement;
-    if (theme === 'light' || theme === 'dark') root.setAttribute('data-theme', theme);
+    if (theme === 'light' || theme === 'dark' || theme === 'discipline') root.setAttribute('data-theme', theme);
     else root.removeAttribute('data-theme');
-    const dark = theme === 'dark' || (theme === 'auto' && darkQuery.matches);
+    const resolved = theme === 'auto' ? (darkQuery.matches ? 'dark' : 'light') : theme;
     const meta = $('meta[name="theme-color"]');
-    if (meta) meta.setAttribute('content', dark ? '#0f1115' : '#f5f6f8');
+    if (meta) meta.setAttribute('content', THEME_COLORS[resolved]);
   }
 
   /* ------------------------------------------------------------------
@@ -265,12 +274,13 @@
     setTimeout(() => { if (!celebrateEl.classList.contains('is-show')) celebrateEl.hidden = true; }, 260);
   }
 
-  function celebrate({ title, text, meter }) {
+  function celebrate({ eyebrow = 'Discipline', title, text, meter }) {
     vibrate([20, 60, 30]);
     if (reducedMotion.matches) {
       toast(`${title}　${text}`);
       return;
     }
+    $('[data-celebrate-eyebrow]', celebrateEl).textContent = eyebrow;
     $('[data-celebrate-title]', celebrateEl).textContent = title;
     $('[data-celebrate-text]', celebrateEl).textContent = text;
     $('[data-celebrate-meter]', celebrateEl).textContent = meter || '';
@@ -283,17 +293,45 @@
 
   celebrateEl.addEventListener('click', closeCelebrate);
 
-  /** Daily のチェックで「今日の Daily をすべて完了」になったらお祝いする */
-  function celebrateIfDayComplete(before) {
+  /** 今の時点で達成している目標の id */
+  function achievedGoalIds() {
+    return new Set(S.getState().goals.filter((g) => S.goalProgress(g).achieved).map((g) => g.id));
+  }
+
+  /** 操作の前の状態を記録しておき、操作の後に比べてお祝いを出す */
+  function snapshotProgress() {
     const today = U.dateKey();
+    return { daily: S.dailyProgress(today), streak: S.growthStreak(today), goals: achievedGoalIds() };
+  }
+
+  function celebrateChanges(before) {
+    const today = U.dateKey();
+    const newGoals = [...achievedGoalIds()].filter((id) => !before.goals.has(id)).map((id) => S.getGoal(id));
     const after = S.dailyProgress(today);
-    if (!(after.total > 0 && after.done === after.total && before.done < before.total)) return;
+    const dayComplete = after.total > 0 && after.done === after.total && before.daily.done < before.daily.total;
+    const streak = S.growthStreak(today);
+    const levelUp = V.flameLevel(streak) > V.flameLevel(before.streak) && V.flameLevel(streak) >= 2;
     const n = S.growthDays(today).length;
-    celebrate({
-      title: 'Day complete',
-      text: `今日の Daily ${after.total} 件をすべて完了しました`,
-      meter: `1.01^${n} = ×${V.formatTimes(V.COMPOUND ** n)}`,
-    });
+    const meter = `1.01^${n} = ×${V.formatTimes(V.COMPOUND ** n)}`;
+    if (newGoals.length) {
+      const g = newGoals[0];
+      celebrate({
+        eyebrow: `${V.periodTitle(g.period, g.periodKey)}の目標`,
+        title: 'Goal achieved',
+        text: newGoals.map((x) => x.title).join('・'),
+        meter,
+      });
+    } else if (levelUp) {
+      const level = V.flameLevel(streak);
+      celebrate({
+        eyebrow: 'Streak',
+        title: 'Level up',
+        text: `${streak}日連続。炎が Lv.${level}「${V.FLAME_LEVELS[level].label}」になりました`,
+        meter,
+      });
+    } else if (dayComplete) {
+      celebrate({ title: 'Day complete', text: `今日の Daily ${after.total} 件をすべて完了しました`, meter });
+    }
   }
 
   /* ------------------------------------------------------------------
@@ -578,6 +616,136 @@
   }
 
   /* ------------------------------------------------------------------
+   * 目標
+   * ------------------------------------------------------------------ */
+  const goalDialog = $('#goal-dialog');
+  const goalForm = $('#goal-form');
+  const DEFAULT_THEMES = ['Body', 'Mind', 'Work', 'Travel', 'Life'];
+  const DEFAULT_DAILY_TARGET = { week: 4, month: 15, year: 200 };
+  let goalEditingId = null;
+  let goalTarget = null; // { period, key }
+
+  function updateMeasureFields() {
+    const measure = new FormData(goalForm).get('measure');
+    $$('[data-measure-fields]', goalForm).forEach((el) => { el.hidden = el.dataset.measureFields !== measure; });
+    showFieldError(goalForm, 'measure', false);
+  }
+
+  /** つながる目標の候補：週 → その週を含む月・年、月 → その年 */
+  function parentCandidates(period, key) {
+    const goals = S.getState().goals;
+    if (period === 'year') return [];
+    const [start, end] = S.periodRange(period, key);
+    const months = new Set([start.slice(0, 7), end.slice(0, 7)]);
+    const years = new Set([start.slice(0, 4), end.slice(0, 4)]);
+    return goals.filter((g) => (period === 'week' && g.period === 'month' && months.has(g.periodKey))
+      || (g.period === 'year' && years.has(g.periodKey)));
+  }
+
+  function openGoalDialog({ id = null } = {}) {
+    const g = id ? S.getGoal(id) : null;
+    goalEditingId = g ? g.id : null;
+    goalTarget = g ? { period: g.period, key: g.periodKey } : { ...ui.goalPeriod };
+    const f = goalForm.elements;
+    const dailies = S.getState().dailies;
+    $('#goal-dialog-title').textContent = g ? '目標を編集' : '目標を追加';
+    $('[data-goal-period]', goalForm).textContent = `対象：${V.periodTitle(goalTarget.period, goalTarget.key)}（${V.PERIOD_NAMES[goalTarget.period]}の目標）`;
+    f.title.value = g ? g.title : '';
+    f.theme.value = g ? g.theme : '';
+    const themes = new Set([...S.getState().goals.map((x) => x.theme).filter(Boolean), ...DEFAULT_THEMES]);
+    $('#goal-themes').innerHTML = [...themes].map((t) => `<option value="${U.escapeHtml(t)}"></option>`).join('');
+
+    const measure = g ? g.measure : (dailies.length ? 'daily' : 'count');
+    $$('input[name="measure"]', goalForm).forEach((r) => { r.checked = r.value === measure; });
+    $('[data-daily-list]', goalForm).innerHTML = dailies.length
+      ? dailies.map((d) => `<label class="daily-pick"><input type="checkbox" name="dailyIds" value="${U.escapeHtml(d.id)}"${g && g.dailyIds.includes(d.id) ? ' checked' : ''}><span>${U.escapeHtml(d.title)}</span></label>`).join('')
+      : '<p class="help">Daily がまだありません。「タスク」→「Daily」で登録すると選べるようになります。</p>';
+    f.targetDaily.value = g && g.measure === 'daily' ? g.target : DEFAULT_DAILY_TARGET[goalTarget.period];
+    f.targetCount.value = g && g.measure === 'count' ? g.target : '';
+    f.unit.value = g && g.measure === 'count' ? g.unit : '';
+    f.current.value = g && g.measure === 'count' ? g.current : 0;
+
+    const candidates = parentCandidates(goalTarget.period, goalTarget.key).filter((x) => x.id !== goalEditingId);
+    f.parentId.innerHTML = '<option value="">なし</option>'
+      + candidates.map((x) => `<option value="${U.escapeHtml(x.id)}">${V.periodTitle(x.period, x.periodKey)}：${U.escapeHtml(x.title)}</option>`).join('');
+    f.parentId.value = g && g.parentId && candidates.some((x) => x.id === g.parentId) ? g.parentId : '';
+    $('[data-parent-field]', goalForm).hidden = goalTarget.period === 'year';
+
+    $('#goal-delete').hidden = !g;
+    showFieldError(goalForm, 'title', false);
+    updateMeasureFields();
+    goalDialog.showModal();
+    focusFirstField(goalForm, { force: !g });
+  }
+
+  goalForm.addEventListener('change', (e) => {
+    if (e.target.name === 'measure') updateMeasureFields();
+  });
+  goalForm.elements.title.addEventListener('input', () => showFieldError(goalForm, 'title', false));
+
+  function goalFormError(message) {
+    const el = $('[data-error="measure"]', goalForm);
+    el.textContent = message;
+    el.hidden = false;
+  }
+
+  goalForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const f = goalForm.elements;
+    const title = f.title.value.trim();
+    if (!title) {
+      showFieldError(goalForm, 'title', true);
+      f.title.focus();
+      return;
+    }
+    const measure = new FormData(goalForm).get('measure');
+    const data = { title, theme: f.theme.value, measure, parentId: f.parentId.value || null };
+    if (measure === 'daily') {
+      data.dailyIds = $$('input[name="dailyIds"]:checked', goalForm).map((cb) => cb.value);
+      data.target = Number(f.targetDaily.value);
+      if (!data.dailyIds.length) { goalFormError('数える Daily を1つ以上選んでください'); return; }
+      if (!(data.target >= 1)) { goalFormError('目標回数は1以上にしてください'); return; }
+    } else if (measure === 'count') {
+      data.target = Number(f.targetCount.value);
+      data.unit = f.unit.value;
+      data.current = Number(f.current.value) || 0;
+      if (!(data.target > 0)) { goalFormError('目標値を入力してください'); return; }
+    }
+    const before = snapshotProgress();
+    if (goalEditingId) {
+      S.updateGoal(goalEditingId, data);
+    } else {
+      S.addGoal({ ...data, period: goalTarget.period, periodKey: goalTarget.key });
+      toast(`「${U.truncate(title, 18)}」を追加しました`);
+    }
+    goalDialog.close();
+    if (goalEditingId) celebrateChanges(before);
+  });
+
+  function deleteGoal(id) {
+    const entry = S.deleteGoal(id);
+    if (!entry) return;
+    toast(`「${U.truncate(entry.item.title, 16)}」を削除しました`, { action: '元に戻す', onAction: () => S.restoreGoal(entry) });
+  }
+
+  function changeGoalCount(id, delta) {
+    const before = snapshotProgress();
+    S.changeGoalCount(id, delta);
+    if (delta > 0) vibrate(10);
+    celebrateChanges(before);
+  }
+
+  function setGoalPeriod(period) {
+    ui.goalPeriod = { period, key: S.periodKeyOf(period, U.dateKey()) };
+    render();
+  }
+
+  function shiftGoalPeriod(step) {
+    ui.goalPeriod = { ...ui.goalPeriod, key: S.shiftPeriod(ui.goalPeriod.period, ui.goalPeriod.key, step) };
+    render();
+  }
+
+  /* ------------------------------------------------------------------
    * Vision
    * ------------------------------------------------------------------ */
   const visionDialog = $('#vision-dialog');
@@ -709,7 +877,7 @@
     } else {
       const s = S.getState();
       const kb = (new Blob([JSON.stringify(s)]).size / 1024).toFixed(1);
-      el.textContent = `現在のデータ：ToDo ${s.todos.length}件・Daily ${s.dailies.length}件・日記 ${s.journals.length}件（約 ${kb} KB）`;
+      el.textContent = `現在のデータ：ToDo ${s.todos.length}件・Daily ${s.dailies.length}件・目標 ${s.goals.length}件・日記 ${s.journals.length}件（約 ${kb} KB）`;
     }
     el.classList.toggle('is-error', isError);
   }
@@ -758,14 +926,14 @@
       const result = S.importJson(textContent);
       applyTheme();
       settingsDialog.close();
-      toast(`インポートしました（ToDo ${result.todos}件・Daily ${result.dailies}件・日記 ${result.journals}件）`);
+      toast(`インポートしました（ToDo ${result.todos}件・Daily ${result.dailies}件・目標 ${result.goals}件・日記 ${result.journals}件）`);
     } catch (err) {
       setStorageMeta('読み込めませんでした。Kojin ToDo からエクスポートした JSON ファイルを選択してください。', true);
     }
   });
 
   function resetAll() {
-    if (!window.confirm(`すべての Daily・ToDo・日記・Vision を削除します。この操作は元に戻せません。よろしいですか？${syncNote()}`)) return;
+    if (!window.confirm(`すべての Daily・ToDo・目標・日記・Vision を削除します。この操作は元に戻せません。よろしいですか？${syncNote()}`)) return;
     S.resetAll();
     settingsDialog.close();
     toast('すべてのデータを削除しました');
@@ -875,7 +1043,7 @@
   }
 
   function syncLogout() {
-    const ok = window.confirm('ログアウトすると、この端末からデータ（タスク・日記・Vision）が消去されます（クラウドには残り、再度ログインすると表示されます）。ログアウトしますか？');
+    const ok = window.confirm('ログアウトすると、この端末からデータ（タスク・目標・日記・Vision）が消去されます（クラウドには残り、再度ログインすると表示されます）。ログアウトしますか？');
     if (!ok) return;
     syncAction(async () => {
       flushJournal();
@@ -982,6 +1150,18 @@
     'journal-today': () => setJournalDate(U.dateKey()),
     'journal-date': (el) => setJournalDate(el.dataset.date),
     'journal-month': (el) => shiftJournalMonth(Number(el.dataset.step)),
+    'add-goal': () => openGoalDialog(),
+    'edit-goal': (el) => openGoalDialog({ id: el.dataset.id }),
+    'goal-inc': (el) => changeGoalCount(el.dataset.id, 1),
+    'goal-dec': (el) => changeGoalCount(el.dataset.id, -1),
+    'goal-period': (el) => setGoalPeriod(el.dataset.period),
+    'goal-shift': (el) => shiftGoalPeriod(Number(el.dataset.step)),
+    'goal-current': () => setGoalPeriod(ui.goalPeriod.period),
+    'dialog-delete-goal': () => {
+      const id = goalEditingId;
+      goalDialog.close();
+      if (id) deleteGoal(id);
+    },
     'sync-google': () => syncAction(() => K.sync.signInWithGoogle()),
     'sync-signup': () => {
       const { email, password } = syncCredentials();
@@ -1025,9 +1205,15 @@
     } else if (el.dataset.action === 'toggle-daily') {
       const today = U.dateKey();
       toggleWithAnimation(el, (checked) => {
-        const before = S.dailyProgress(today);
+        const before = snapshotProgress();
         S.setDailyDone(el.dataset.id, today, checked);
-        if (checked) celebrateIfDayComplete(before);
+        if (checked) celebrateChanges(before);
+      });
+    } else if (el.dataset.action === 'toggle-goal') {
+      toggleWithAnimation(el, (checked) => {
+        const before = snapshotProgress();
+        S.setGoalDone(el.dataset.id, checked);
+        if (checked) celebrateChanges(before);
       });
     }
   });
@@ -1102,7 +1288,7 @@
 
   /* ------------------------------------------------------------------
    * キーボードショートカット（PC）
-   *   N: 新規追加欄へ移動 / 1〜6: 画面切り替え / Esc: 入力欄から抜ける
+   *   N: 新規追加欄へ移動 / 1〜7: 画面切り替え / Esc: 入力欄から抜ける
    * ------------------------------------------------------------------ */
   document.addEventListener('keydown', (e) => {
     if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -1125,7 +1311,7 @@
         e.preventDefault();
         input.focus();
       }
-    } else if (['1', '2', '3', '4', '5', '6'].includes(e.key)) {
+    } else if (/^[1-7]$/.test(e.key)) {
       location.hash = `#${VIEWS[Number(e.key) - 1]}`;
     }
   });
@@ -1137,7 +1323,7 @@
     const loaded = S.load();
     applyTheme();
     hydrateIcons();
-    [taskDialog, dailyDialog, settingsDialog, visionDialog, lightbox].forEach(setupDialog);
+    [taskDialog, dailyDialog, settingsDialog, visionDialog, goalDialog, lightbox].forEach(setupDialog);
 
     // URL に画面の指定がなければ、設定した「最初に開く画面」を表示する
     const startView = S.getState().settings.startView;

@@ -7,7 +7,7 @@
 (function (K) {
   'use strict';
 
-  const { escapeHtml: esc, formatShort, formatMonthDay, diffDays, isoToKey, WEEKDAYS } = K.utils;
+  const { escapeHtml: esc, formatShort, formatMonthDay, diffDays, isoToKey, addDays, WEEKDAYS } = K.utils;
   const S = K.store;
 
   /* ------------------------------------------------------------------
@@ -37,6 +37,9 @@
     edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
     image: '<rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.8"/><path d="m21 16-5-5-8.5 8.5"/>',
     left: '<path d="m15 5-7 7 7 7"/>',
+    target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="0.6"/>',
+    minus: '<path d="M5 12h14"/>',
+    up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
     right: '<path d="m9 5 7 7-7 7"/>',
     sparkle: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',
   };
@@ -501,6 +504,111 @@
     </section>`;
   }
 
+  /* 連続記録で育つ炎（7日・21日・66日でレベルアップ） */
+  const FLAME_LEVELS = [
+    { min: 0, label: '火種' },
+    { min: 1, label: '小さな炎' },
+    { min: 7, label: '炎' },
+    { min: 21, label: '大きな炎' },
+    { min: 66, label: '青い炎' },
+  ];
+
+  function flameLevel(days) {
+    let level = 0;
+    FLAME_LEVELS.forEach((l, i) => { if (days >= l.min) level = i; });
+    return level;
+  }
+
+  function flameSvg(level) {
+    return `<svg class="flame flame-lv${level}" viewBox="0 0 64 80" aria-hidden="true" focusable="false">
+      <defs><linearGradient id="flame-grad" x1="0" y1="1" x2="0" y2="0"><stop offset="0" class="fs1"/><stop offset="1" class="fs2"/></linearGradient></defs>
+      <path class="flame-outer" fill="url(#flame-grad)" d="M32 4c4 12 18 20 18 40a18 18 0 0 1-36 0c0-9 4-15 8-19 1 7 5 11 9 11-4-12-3-22 1-32z"/>
+      <path class="flame-inner" d="M32 40c2 6 9 10 9 19a9 9 0 0 1-18 0c0-5 3-8 5-10 1 3 2 5 4 5-1-5-1-10 0-14z"/>
+    </svg>`;
+  }
+
+  function flameCard(days) {
+    const level = flameLevel(days);
+    const next = FLAME_LEVELS[level + 1];
+    const note = next
+      ? `あと <b>${next.min - days}</b> 日で Lv.${level + 1}「${next.label}」${next.min === 66 ? '・66日は習慣化の目安' : ''}`
+      : '66日を超えました。もう習慣になっています';
+    return `<section class="vcard flame-card" aria-label="連続記録">
+      <p class="vcard-label">Streak</p>
+      <div class="flame-row">
+        ${flameSvg(level)}
+        <div>
+          <p class="flame-days"><b>${days}</b>日連続</p>
+          <p class="flame-level">Lv.${level} ${FLAME_LEVELS[level].label}</p>
+        </div>
+      </div>
+      <p class="vcard-note">${note}</p>
+    </section>`;
+  }
+
+  /* 積み上げのマス目：Daily の達成率と日記で 0〜4 の濃さ */
+  function dayLevel(key) {
+    const p = S.dailyProgress(key);
+    const wrote = Boolean(S.getJournal(key));
+    const v = p.total ? (p.done / p.total) * 0.75 + (wrote ? 0.25 : 0) : (wrote ? 0.5 : 0);
+    if (v <= 0) return 0;
+    if (v < 0.34) return 1;
+    if (v < 0.67) return 2;
+    if (v < 1) return 3;
+    return 4;
+  }
+
+  function heatmap(today, visionYear) {
+    const inVisionYear = visionYear && today >= `${visionYear}-01-01` && today <= `${visionYear}-12-31`;
+    const first = inVisionYear ? `${visionYear}-01-01` : addDays(today, -364);
+    const last = inVisionYear ? `${visionYear}-12-31` : today;
+    const title = inVisionYear ? `${visionYear}年の積み上げ` : 'この1年の積み上げ';
+    const start = S.periodKeyOf('week', first);
+    const end = addDays(S.periodKeyOf('week', last), 6);
+    const cols = (diffDays(start, end) + 1) / 7; // start は月曜、end は日曜なので必ず整数になる
+    const cells = [];
+    const months = [];
+    let active = 0;
+    let lastMonth = '';
+    for (let c = 0; c < cols; c += 1) {
+      for (let r = 0; r < 7; r += 1) {
+        const key = addDays(start, c * 7 + r);
+        const month = key.slice(0, 7);
+        if (key.slice(8) === '01' || (c === 0 && r === 0)) {
+          if (month !== lastMonth && key >= first && key <= last) {
+            months.push(`<span style="grid-column:${c + 1} / span 3">${Number(key.slice(5, 7))}月</span>`);
+            lastMonth = month;
+          }
+        }
+        if (key < first || key > last) {
+          cells.push('<i class="hm is-out"></i>');
+        } else if (key > today) {
+          cells.push(`<i class="hm is-future" title="${formatShort(key)}"></i>`);
+        } else {
+          const level = dayLevel(key);
+          if (level) active += 1;
+          cells.push(`<i class="hm l${level}${key === today ? ' is-today' : ''}" title="${formatShort(key)}"></i>`);
+        }
+      }
+    }
+    const legend = [0, 1, 2, 3, 4].map((l) => `<i class="hm l${l}"></i>`).join('');
+    return `<section class="vision-section heat-section" aria-label="${title}">
+      <div class="section-head">
+        <h2 class="section-title">${title}</h2>
+        <span class="section-count">${active}日</span>
+        <span class="spacer"></span>
+        <span class="heat-legend">少${legend}多</span>
+      </div>
+      <div class="heat-card">
+        <div class="heat-scroll">
+          <div class="heat-months" style="grid-template-columns:repeat(${cols}, var(--hm))">${months.join('')}</div>
+          <div class="heat-grid" style="grid-template-columns:repeat(${cols}, var(--hm))">${cells.join('')}</div>
+        </div>
+        <p class="vcard-note">Daily の達成率と、日記を書いたかどうかで色の濃さが決まります</p>
+      </div>
+    </section>`;
+  }
+
   function viewVision(ctx) {
     const { state, today } = ctx;
     const v = state.vision;
@@ -510,6 +618,8 @@
     const title = (v && v.title) || 'My Vision';
     const progress = S.dailyProgress(today);
     const wrote = Boolean(S.getJournal(today));
+    const weekGoals = S.goalsFor('week', S.periodKeyOf('week', today));
+    const weekDone = weekGoals.filter((g) => S.goalProgress(g).achieved).length;
 
     const hero = img
       ? `<figure class="vision-hero">
@@ -551,13 +661,16 @@
       ${hero}
       <div class="vision-cards">
         ${compoundMeter(S.growthDays(today).length)}
+        ${flameCard(S.growthStreak(today))}
         ${countdownCard(v && v.year, today)}
         <section class="vcard today-card">
           <p class="vcard-label">今日</p>
           <a class="today-link" href="#today"><span>Daily</span><b>${progress.total ? `${progress.done} / ${progress.total}` : '–'}</b>${icon('right')}</a>
+          <a class="today-link" href="#goals"><span>今週の目標</span><b>${weekGoals.length ? `${weekDone} / ${weekGoals.length}` : '未設定'}</b>${icon('right')}</a>
           <a class="today-link" href="#journal"><span>日記</span><b>${wrote ? '書きました' : 'まだ'}</b>${icon('right')}</a>
         </section>
       </div>
+      ${heatmap(today, v && v.year)}
       ${textBlock}
     </div>`;
   }
@@ -670,9 +783,111 @@
     </div>`;
   }
 
+  /* ------------------------------------------------------------------
+   * 画面：目標
+   * ------------------------------------------------------------------ */
+  const PERIOD_NAMES = { week: '週', month: '月', year: '年' };
+  const CURRENT_NAMES = { week: '今週', month: '今月', year: '今年' };
+  const GOAL_HINTS = {
+    week: '例：朝ランを週4回（Daily の回数）、本を1冊読み切る（達成・未達成）',
+    month: '例：月に100km走る（数値）、採用広報の記事を2本公開する',
+    year: '例：フルマラソンを完走する、海外に2回行く、本を24冊読む',
+  };
+
+  function periodTitle(period, key) {
+    if (period === 'week') return `${formatShort(key)}〜${formatShort(addDays(key, 6))}`;
+    if (period === 'month') return `${key.slice(0, 4)}年${Number(key.slice(5, 7))}月`;
+    return `${key}年`;
+  }
+
+  function formatNumber(n) {
+    return Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
+  }
+
+  function goalCard(g) {
+    const id = esc(g.id);
+    const p = S.goalProgress(g);
+    const pct = Math.min(100, Math.round((p.value / p.target) * 100));
+    const parent = g.parentId ? S.getGoal(g.parentId) : null;
+    let body;
+    if (g.measure === 'check') {
+      body = `<label class="goal-check check-row">
+          <span class="check">
+            <input type="checkbox" data-action="toggle-goal" data-id="${id}"${g.done ? ' checked' : ''} aria-label="「${esc(g.title)}」を達成にする">
+            <span class="check-ui">${icon('check')}</span>
+          </span>
+          <span>${g.done ? '達成しました' : '達成したらチェック'}</span>
+        </label>`;
+    } else {
+      const unit = g.measure === 'daily' ? '回' : esc(g.unit);
+      const dailies = g.measure === 'daily' ? g.dailyIds.map((d) => S.getDaily(d)).filter(Boolean) : [];
+      body = `<div class="goal-progress">
+          <div class="goal-bar" aria-hidden="true"><span style="width:${pct}%"></span></div>
+          <p class="goal-num"><b>${formatNumber(p.value)}</b> / ${formatNumber(p.target)} ${unit}</p>
+        </div>
+        ${g.measure === 'count' ? `<div class="goal-steps">
+          <button type="button" class="step-btn" data-action="goal-dec" data-id="${id}" aria-label="1 減らす">${icon('minus')}</button>
+          <button type="button" class="step-btn step-btn--plus" data-action="goal-inc" data-id="${id}" aria-label="1 増やす">${icon('plus')}</button>
+        </div>` : ''}
+        ${g.measure === 'daily' ? `<p class="goal-dailies">${icon('repeat')}${dailies.length ? dailies.map((d) => esc(d.title)).join('・') : 'ひも付けた Daily がありません'}</p>` : ''}`;
+    }
+    return `<article class="goal-card${p.achieved ? ' is-achieved' : ''}" data-id="${id}">
+      <div class="goal-top">
+        ${g.theme ? `<span class="goal-theme">${esc(g.theme)}</span>` : ''}
+        ${p.achieved ? `<span class="goal-badge">${icon('check')}達成</span>` : ''}
+        <span class="spacer"></span>
+        <button type="button" class="icon-btn" data-action="edit-goal" data-id="${id}" aria-label="「${esc(g.title)}」を編集">${icon('edit')}</button>
+      </div>
+      <h3 class="goal-title">${esc(g.title)}</h3>
+      ${body}
+      ${parent ? `<p class="goal-parent">${icon('up')}${periodTitle(parent.period, parent.periodKey)}：${esc(parent.title)}</p>` : ''}
+    </article>`;
+  }
+
+  function viewGoals(ctx) {
+    const { today, ui } = ctx;
+    const { period, key } = ui.goalPeriod;
+    const achievedOf = (g) => S.goalProgress(g).achieved;
+    const goals = S.goalsFor(period, key).slice()
+      .sort((a, b) => Number(achievedOf(a)) - Number(achievedOf(b)) || a.createdAt.localeCompare(b.createdAt));
+    const achieved = goals.filter(achievedOf).length;
+    const isCurrent = key === S.periodKeyOf(period, today);
+    const title = periodTitle(period, key);
+    const seg = S.GOAL_PERIODS.map((p) => `<button type="button" class="seg" data-action="goal-period" data-period="${p}" aria-pressed="${p === period}">${PERIOD_NAMES[p]}</button>`).join('');
+
+    return `<div class="view view-goals">
+      ${storageBanner(ctx)}
+      <header class="view-header view-header--row">
+        <div class="view-header-text">
+          <p class="eyebrow">Goals</p>
+          <h1 class="view-title">目標</h1>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" data-action="add-goal">${icon('plus')}目標を追加</button>
+      </header>
+      <div class="segmented" role="group" aria-label="期間の種類">${seg}</div>
+      <div class="goal-periodbar">
+        <button type="button" class="icon-btn" data-action="goal-shift" data-step="-1" aria-label="前の${PERIOD_NAMES[period]}">${icon('left')}</button>
+        <p class="goal-period-title">${title}${isCurrent ? `<span class="pill">${CURRENT_NAMES[period]}</span>` : ''}</p>
+        <button type="button" class="icon-btn" data-action="goal-shift" data-step="1" aria-label="次の${PERIOD_NAMES[period]}">${icon('right')}</button>
+        ${isCurrent ? '' : `<button type="button" class="btn btn-ghost btn-sm" data-action="goal-current">${CURRENT_NAMES[period]}へ</button>`}
+      </div>
+      ${goals.length
+        ? `<p class="goal-summary"><b>${achieved}</b> / ${goals.length} 件達成</p>
+           <div class="goal-list">${goals.map(goalCard).join('')}</div>`
+        : emptyState('target', `${title}の目標はまだありません`, GOAL_HINTS[period],
+          '<button type="button" class="btn btn-primary btn-sm" data-action="add-goal">目標を追加</button>')}
+    </div>`;
+  }
+
   /* ------------------------------------------------------------------ */
   const VIEWS = {
-    today: viewToday, daily: viewDaily, todo: viewTodo, matrix: viewMatrix, vision: viewVision, journal: viewJournal,
+    today: viewToday,
+    daily: viewDaily,
+    todo: viewTodo,
+    matrix: viewMatrix,
+    vision: viewVision,
+    goals: viewGoals,
+    journal: viewJournal,
   };
 
   K.views = {
@@ -681,6 +896,10 @@
     QUADRANT_INFO,
     COMPOUND,
     formatTimes,
+    FLAME_LEVELS,
+    flameLevel,
+    periodTitle,
+    PERIOD_NAMES,
     render: (name, ctx) => (VIEWS[name] || viewToday)(ctx),
   };
 })(window.Kojin = window.Kojin || {});

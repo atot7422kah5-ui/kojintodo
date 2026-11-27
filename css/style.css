@@ -73,7 +73,7 @@
 
 /* ダークテーマ（OS 設定に追従。設定画面で固定も可能） */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
+  :root:not([data-theme="light"]):not([data-theme="discipline"]) {
     --bg: #0f1115;
     --surface: #171a20;
     --surface-2: #1d2128;
@@ -161,6 +161,63 @@
   --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
   color-scheme: dark;
 }
+
+/* Discipline テーマ：黒基調＋夕焼けのオレンジ（ビジョンボードの世界観） */
+:root[data-theme="discipline"] {
+  --bg: #0a0b0e;
+  --surface: #14161b;
+  --surface-2: #1b1e24;
+  --surface-3: #262a31;
+  --border: #23262d;
+  --border-strong: #353942;
+  --text: #f4f1ec;
+  --text-2: #b7b1a8;
+  --text-3: #7f7a72;
+  --accent: #ff9a3d;
+  --accent-hover: #ffad5e;
+  --accent-soft: rgba(255, 154, 61, 0.14);
+  --accent-text: #ffb46b;
+  --accent-ring: rgba(255, 154, 61, 0.3);
+  --on-accent: #1a1209;
+  --danger: #ff6b5b;
+  --danger-soft: rgba(255, 107, 91, 0.14);
+  --warn: #ffc15e;
+  --warn-soft: rgba(255, 193, 94, 0.13);
+  --success: #4cc38a;
+  --q1: #ff6b5b;
+  --q1-soft: rgba(255, 107, 91, 0.11);
+  --q2: #ff9a3d;
+  --q2-soft: rgba(255, 154, 61, 0.11);
+  --q3: #ffd166;
+  --q3-soft: rgba(255, 209, 102, 0.1);
+  --q4: #8a8f99;
+  --q4-soft: rgba(138, 143, 153, 0.1);
+  --toast-bg: #f4f1ec;
+  --toast-fg: #1a1209;
+  --toast-action: #c2410c;
+  --hero-bg: #000000;
+  --hero-border: rgba(255, 255, 255, 0.08);
+  --mood-1: #6b6f78;
+  --mood-2: #b98d5f;
+  --mood-3: #e0a052;
+  --mood-4: #ff9a3d;
+  --mood-5: #ff6a3d;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.45), 0 6px 16px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
+}
+
+/* 見出しを力強い太字に */
+:root[data-theme="discipline"] .view-title,
+:root[data-theme="discipline"] .brand-name,
+:root[data-theme="discipline"] .goal-title {
+  font-family: var(--font-display);
+  font-weight: 900;
+  letter-spacing: -0.01em;
+}
+
+:root[data-theme="discipline"] .eyebrow { letter-spacing: 0.06em; }
 
 /* 象限ごとの色を --qc / --qc-soft に割り当てる */
 [data-q="q1"] { --qc: var(--q1); --qc-soft: var(--q1-soft); }
@@ -1043,6 +1100,9 @@ kbd {
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
+
+.segmented-radio { display: flex; }
+.segmented-radio .seg { flex: 1 1 0; padding: 0 6px; }
 
 .segmented-radio .seg input {
   position: absolute;
@@ -2039,6 +2099,357 @@ dialog.lightbox::backdrop { background: #000; }
   .vision-word { font-size: clamp(26px, 8vw, 36px); }
   .meter-value { font-size: 40px; }
 }
+
+/* ==========================================================================
+   炎（連続記録）
+   ========================================================================== */
+.flame-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.flame {
+  flex: none;
+  width: 48px;
+  height: 60px;
+  transform-origin: 50% 100%;
+}
+
+.flame-lv0 { width: 34px; height: 42px; }
+.flame-lv1 { width: 40px; height: 50px; }
+.flame-lv3 { width: 54px; height: 68px; }
+.flame-lv4 { width: 58px; height: 72px; }
+
+.flame .fs1 { stop-color: #6b7280; }
+.flame .fs2 { stop-color: #9ca3af; }
+.flame-inner { fill: rgba(255, 255, 255, 0.55); }
+.flame-lv1 .fs1 { stop-color: #ff9a3d; }
+.flame-lv1 .fs2 { stop-color: #ffd166; }
+.flame-lv2 .fs1 { stop-color: #ff6a3d; }
+.flame-lv2 .fs2 { stop-color: #ffb454; }
+.flame-lv3 .fs1 { stop-color: #e8362a; }
+.flame-lv3 .fs2 { stop-color: #ff9a3d; }
+.flame-lv4 .fs1 { stop-color: #2563eb; }
+.flame-lv4 .fs2 { stop-color: #93c5fd; }
+.flame-lv3 { filter: drop-shadow(0 0 8px rgba(255, 106, 61, 0.55)); }
+.flame-lv4 { filter: drop-shadow(0 0 10px rgba(96, 165, 250, 0.6)); }
+
+.flame:not(.flame-lv0) { animation: flicker 1.8s ease-in-out infinite alternate; }
+
+@keyframes flicker {
+  0% { transform: scale(1, 1) skewX(0deg); }
+  50% { transform: scale(0.98, 1.05) skewX(-1.5deg); }
+  100% { transform: scale(1.02, 0.97) skewX(1.5deg); }
+}
+
+.flame-days { font-size: 15px; font-weight: 700; }
+
+.flame-days b {
+  margin-right: 2px;
+  font-family: var(--font-display);
+  font-size: 36px;
+  font-weight: 900;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.flame-level { font-size: 13px; font-weight: 700; color: var(--warn); }
+.vcard-note b { color: var(--text-2); }
+
+/* ==========================================================================
+   積み上げのマス目（ヒートマップ）
+   ========================================================================== */
+.heat-card {
+  padding: 14px 16px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  --hm: 11px;
+}
+
+.heat-scroll {
+  overflow-x: auto;
+  padding: 2px 2px 6px; /* 「今日」のマスの枠線が端で切れないように */
+  scrollbar-width: thin;
+}
+
+.heat-months,
+.heat-grid {
+  display: grid;
+  gap: 3px;
+  width: max-content;
+}
+
+.heat-months {
+  height: 16px;
+  margin-bottom: 4px;
+  font-size: 10px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.heat-grid {
+  grid-auto-flow: column;
+  grid-template-rows: repeat(7, var(--hm));
+}
+
+.hm {
+  display: inline-block;
+  width: var(--hm);
+  height: var(--hm);
+  border-radius: 3px;
+  background: var(--surface-3);
+}
+
+.hm.l1 { background: color-mix(in srgb, var(--hero-accent) 30%, var(--surface-3)); }
+.hm.l2 { background: color-mix(in srgb, var(--hero-accent) 55%, var(--surface-3)); }
+.hm.l3 { background: color-mix(in srgb, var(--hero-accent-2) 75%, var(--hero-accent)); }
+.hm.l4 { background: var(--hero-accent-2); }
+.hm.is-future { background: transparent; box-shadow: inset 0 0 0 1px var(--border); }
+.hm.is-out { visibility: hidden; }
+.hm.is-today { box-shadow: 0 0 0 1.5px var(--text); }
+
+.heat-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.heat-legend .hm { width: 10px; height: 10px; }
+
+/* ==========================================================================
+   目標
+   ========================================================================== */
+.view-goals .segmented { margin-bottom: 12px; }
+
+.goal-periodbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.goal-period-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.goal-summary {
+  margin: 0 4px 10px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.goal-summary b { font-size: 16px; color: var(--text); }
+
+.goal-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 12px;
+}
+
+.goal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.goal-card.is-achieved {
+  border-color: color-mix(in srgb, var(--hero-accent) 60%, var(--border));
+  background: color-mix(in srgb, var(--hero-accent) 7%, var(--surface));
+}
+
+.goal-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+}
+
+.goal-top .icon-btn { width: 30px; height: 30px; margin-right: -6px; }
+
+.goal-theme {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+
+.goal-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 9px 2px 6px;
+  border-radius: 999px;
+  background: var(--hero-bg);
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--hero-accent);
+}
+
+.goal-badge .icon { width: 12px; height: 12px; stroke-width: 3; }
+
+.goal-title {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.goal-progress { display: flex; flex-direction: column; gap: 6px; }
+
+.goal-bar {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--surface-3);
+}
+
+.goal-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.5s ease;
+}
+
+.goal-card.is-achieved .goal-bar span { background: linear-gradient(90deg, var(--hero-accent), var(--hero-accent-2)); }
+
+.goal-num { font-size: 13px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+
+.goal-num b {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 900;
+  color: var(--text);
+}
+
+.goal-steps { display: flex; gap: 8px; }
+
+.step-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 36px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  color: var(--text-2);
+  transition: background 0.15s, transform 0.1s;
+}
+
+.step-btn:hover { background: var(--surface-2); }
+.step-btn:active { transform: scale(0.94); }
+.step-btn--plus { flex: 1; border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
+
+.goal-dailies,
+.goal-parent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.goal-dailies .icon,
+.goal-parent .icon { width: 14px; height: 14px; }
+
+.goal-check {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: -8px;
+  font-size: 14px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+/* 目標ダイアログ */
+.goal-dialog-period {
+  align-self: flex-start;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+
+.measure-picker { display: flex; flex-direction: column; gap: 6px; }
+
+.measure-opt {
+  position: relative;
+  cursor: pointer;
+}
+
+.measure-opt input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.measure-opt > span {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 10px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.measure-opt b { font-size: 14px; }
+.measure-opt small { font-size: 12px; color: var(--text-3); }
+.measure-opt input:checked + span { border-color: var(--accent); background: var(--accent-soft); }
+.measure-opt input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.daily-pick-list { display: flex; flex-direction: column; gap: 4px; }
+
+.daily-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.daily-pick input { width: 18px; height: 18px; accent-color: var(--accent); }
+
+.inline-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.inline-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.input-num { width: 96px; }
+.input-unit { width: 80px; }
 
 /* ==========================================================================
    お祝い（Daily をすべて完了したとき）

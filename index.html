@@ -13,14 +13,14 @@
   <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
   <!-- 更新時は ?v= の値をすべて変更する（ブラウザに残った古い CSS・JS と混ざらないようにするため） -->
-  <link rel="stylesheet" href="css/style.css?v=20261127">
+  <link rel="stylesheet" href="css/style.css?v=20261127-2">
   <script>
     // 画面のちらつきを防ぐため、描画前に保存済みテーマを適用する
     (function () {
       try {
         var s = JSON.parse(localStorage.getItem('kojintodo:v1'));
         var t = s && s.settings && s.settings.theme;
-        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+        if (t === 'light' || t === 'dark' || t === 'discipline') document.documentElement.setAttribute('data-theme', t);
       } catch (e) { /* 読めなければ自動テーマのまま */ }
       // アプリとしてインストールするための設定（ファイルを直接開いたときは読み込まない）
       if (location.protocol === 'https:' || location.protocol === 'http:') {
@@ -48,6 +48,7 @@
         <a class="nav-link" href="#matrix" data-nav="matrix"><span data-icon="grid"></span><span>マトリクス</span><span class="nav-count" data-count="matrix"></span></a>
         <p class="nav-group">ライフ</p>
         <a class="nav-link" href="#vision" data-nav="vision"><span data-icon="mountain"></span><span>Vision</span></a>
+        <a class="nav-link" href="#goals" data-nav="goals"><span data-icon="target"></span><span>目標</span><span class="nav-count" data-count="goals"></span></a>
         <a class="nav-link" href="#journal" data-nav="journal"><span data-icon="book"></span><span>日記</span><span class="nav-count" data-count="journal"></span></a>
       </nav>
       <div class="sidebar-foot">
@@ -82,6 +83,7 @@
       <a class="tab" href="#todo" data-nav="todo" data-mode="task"><span data-icon="list"></span><span>ToDo</span></a>
       <a class="tab" href="#matrix" data-nav="matrix" data-mode="task"><span data-icon="grid"></span><span>マトリクス</span></a>
       <a class="tab" href="#vision" data-nav="vision" data-mode="life"><span data-icon="mountain"></span><span>Vision</span></a>
+      <a class="tab" href="#goals" data-nav="goals" data-mode="life"><span data-icon="target"></span><span>目標</span></a>
       <a class="tab" href="#journal" data-nav="journal" data-mode="life"><span data-icon="book"></span><span>日記</span></a>
     </nav>
   </div>
@@ -202,6 +204,7 @@
           <div class="segmented segmented-radio">
             <label class="seg"><input type="radio" name="startView" value="today"><span>今日</span></label>
             <label class="seg"><input type="radio" name="startView" value="vision"><span>Vision</span></label>
+            <label class="seg"><input type="radio" name="startView" value="goals"><span>目標</span></label>
             <label class="seg"><input type="radio" name="startView" value="journal"><span>日記</span></label>
           </div>
           <p class="help">「Vision」にすると、毎朝アプリを開いたときに最初にビジョンボードが表示されます（この端末だけの設定です）。</p>
@@ -213,7 +216,9 @@
             <label class="seg"><input type="radio" name="theme" value="auto"><span>自動</span></label>
             <label class="seg"><input type="radio" name="theme" value="light"><span>ライト</span></label>
             <label class="seg"><input type="radio" name="theme" value="dark"><span>ダーク</span></label>
+            <label class="seg"><input type="radio" name="theme" value="discipline"><span>Discipline</span></label>
           </div>
+          <p class="help">「Discipline」は黒を基調に夕焼けのオレンジを差した、ビジョンボードの世界観に合わせたテーマです。</p>
         </fieldset>
 
         <div class="field">
@@ -236,7 +241,7 @@
 
         <div class="field danger-zone">
           <span class="field-label">データの削除</span>
-          <p class="help">すべての Daily・ToDo・日記・Vision を削除します。元に戻せないため、必要に応じて先にエクスポートしてください。</p>
+          <p class="help">すべての Daily・ToDo・目標・日記・Vision を削除します。元に戻せないため、必要に応じて先にエクスポートしてください。</p>
           <div class="btn-row">
             <button type="button" class="btn btn-danger-outline" data-action="reset-all">すべてのデータを削除</button>
           </div>
@@ -248,6 +253,74 @@
         <button type="button" class="btn btn-primary" data-close>閉じる</button>
       </footer>
     </div>
+  </dialog>
+
+  <!-- 目標の追加・編集ダイアログ -->
+  <dialog id="goal-dialog" class="sheet" aria-labelledby="goal-dialog-title">
+    <form id="goal-form" class="sheet-form" novalidate>
+      <header class="sheet-head">
+        <h2 id="goal-dialog-title" class="sheet-title">目標を追加</h2>
+        <button type="button" class="icon-btn" data-close aria-label="閉じる"><span data-icon="x"></span></button>
+      </header>
+      <div class="sheet-body">
+        <p class="goal-dialog-period" data-goal-period></p>
+        <label class="field">
+          <span class="field-label">目標</span>
+          <input class="input" name="title" type="text" maxlength="120" autocomplete="off" placeholder="例：朝ランを週4回" required>
+          <span class="field-error" data-error="title" hidden>目標を入力してください</span>
+        </label>
+        <label class="field">
+          <span class="field-label">テーマ（任意）</span>
+          <input class="input" name="theme" type="text" maxlength="20" list="goal-themes" autocomplete="off" placeholder="例：Body、Mind、Work、Travel、Life">
+          <datalist id="goal-themes"></datalist>
+        </label>
+        <fieldset class="field">
+          <legend class="field-label">進み具合の測り方</legend>
+          <div class="measure-picker">
+            <label class="measure-opt"><input type="radio" name="measure" value="daily"><span><b>Daily の回数</b><small>選んだ Daily をこなした回数で自動集計</small></span></label>
+            <label class="measure-opt"><input type="radio" name="measure" value="count"><span><b>数値</b><small>km・冊・本など、自分で記録</small></span></label>
+            <label class="measure-opt"><input type="radio" name="measure" value="check"><span><b>達成・未達成</b><small>やり切ったらチェック</small></span></label>
+          </div>
+        </fieldset>
+        <div class="field" data-measure-fields="daily">
+          <span class="field-label">数える Daily</span>
+          <div class="daily-pick-list" data-daily-list></div>
+          <label class="inline-field">
+            <span>目標回数</span>
+            <input class="input input-num" name="targetDaily" type="number" inputmode="numeric" min="1" step="1">
+            <span>回</span>
+          </label>
+        </div>
+        <div class="field" data-measure-fields="count">
+          <div class="inline-fields">
+            <label class="inline-field">
+              <span>目標値</span>
+              <input class="input input-num" name="targetCount" type="number" inputmode="decimal" min="0.01" step="any">
+            </label>
+            <label class="inline-field">
+              <span>単位</span>
+              <input class="input input-unit" name="unit" type="text" maxlength="12" placeholder="km">
+            </label>
+            <label class="inline-field">
+              <span>現在</span>
+              <input class="input input-num" name="current" type="number" inputmode="decimal" min="0" step="any">
+            </label>
+          </div>
+        </div>
+        <label class="field" data-parent-field>
+          <span class="field-label">つながる目標（任意）</span>
+          <select class="input" name="parentId"></select>
+          <span class="help">週の目標は月・年の目標に、月の目標は年の目標につなげられます。</span>
+        </label>
+        <span class="field-error" data-error="measure" hidden></span>
+      </div>
+      <footer class="sheet-foot">
+        <button type="button" class="btn btn-danger" data-action="dialog-delete-goal" id="goal-delete">削除</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn btn-ghost" data-close>キャンセル</button>
+        <button type="submit" class="btn btn-primary">保存</button>
+      </footer>
+    </form>
   </dialog>
 
   <!-- Vision 編集ダイアログ -->
@@ -310,7 +383,7 @@
   <div id="celebrate" class="celebrate" hidden>
     <canvas class="celebrate-canvas" aria-hidden="true"></canvas>
     <div class="celebrate-card" role="status" aria-live="polite">
-      <p class="celebrate-eyebrow">Discipline</p>
+      <p class="celebrate-eyebrow" data-celebrate-eyebrow>Discipline</p>
       <p class="celebrate-title" data-celebrate-title>Day complete</p>
       <p class="celebrate-text" data-celebrate-text></p>
       <p class="celebrate-meter" data-celebrate-meter></p>
@@ -319,11 +392,11 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script src="js/utils.js?v=20261127"></script>
-  <script src="js/store.js?v=20261127"></script>
-  <script src="js/views.js?v=20261127"></script>
-  <script src="js/firebase-config.js?v=20261127"></script>
-  <script src="js/sync.js?v=20261127"></script>
-  <script src="js/app.js?v=20261127"></script>
+  <script src="js/utils.js?v=20261127-2"></script>
+  <script src="js/store.js?v=20261127-2"></script>
+  <script src="js/views.js?v=20261127-2"></script>
+  <script src="js/firebase-config.js?v=20261127-2"></script>
+  <script src="js/sync.js?v=20261127-2"></script>
+  <script src="js/app.js?v=20261127-2"></script>
 </body>
 </html>
